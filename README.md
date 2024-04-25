@@ -24,7 +24,8 @@ the privacy and security goals of the project.
 
 This is very much a work in progress; input is welcome.  However, see our
 [contribution guidelines](./CONTRIBUTING.md) for some important notices
-regarding how to participate in the project.
+regarding how to participate in the project. Also, a [development guide](./DEVELOPMENT.md) 
+is provided to give a high-level overview of the code.
 
 ## Getting Started
 
