@@ -7,7 +7,10 @@ pub mod echo {
     use std::collections::HashMap;
 
     use async_trait::async_trait;
-    use axum::extract::{FromRequest, Query, RequestParts};
+    use axum::{
+        extract::{FromRequestParts, Query},
+        http::request::Parts,
+    };
     use hyper::http::uri;
     use serde::{Deserialize, Serialize};
 
@@ -55,10 +58,13 @@ pub mod echo {
     }
 
     #[async_trait]
-    impl<B: Send> FromRequest<B> for Request {
+    impl<S> FromRequestParts<S> for Request
+    where
+        S: Send + Sync,
+    {
         type Rejection = Error;
 
-        async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        async fn from_request_parts(req: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
             let Query::<HashMap<String, String>>(query_params) = req.extract().await?;
             let headers = req
                 .headers()
@@ -82,7 +88,10 @@ pub mod query {
     use std::fmt::{Display, Formatter};
 
     use async_trait::async_trait;
-    use axum::extract::{FromRequest, Query, RequestParts};
+    use axum::{
+        extract::{FromRequestParts, Query},
+        http::request::Parts,
+    };
     use serde::Deserialize;
 
     use crate::{
@@ -104,10 +113,13 @@ pub mod query {
     }
 
     #[async_trait]
-    impl<B: Send> FromRequest<B> for QueryConfigQueryParams {
+    impl<S> FromRequestParts<S> for QueryConfigQueryParams
+    where
+        S: Send + Sync,
+    {
         type Rejection = Error;
 
-        async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        async fn from_request_parts(req: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
             #[derive(Deserialize)]
             struct QueryTypeParam {
                 size: QuerySize,
@@ -175,7 +187,7 @@ pub mod query {
     pub mod create {
 
         use async_trait::async_trait;
-        use axum::extract::{FromRequest, RequestParts};
+        use axum::{extract::FromRequest, http::Request as HttpRequest};
         use hyper::http::uri;
         use serde::{Deserialize, Serialize};
 
@@ -217,10 +229,14 @@ pub mod query {
         }
 
         #[async_trait]
-        impl<B: Send> FromRequest<B> for Request {
+        impl<S, B> FromRequest<S, B> for Request
+        where
+            S: Send + Sync,
+            B: Send + 'static,
+        {
             type Rejection = Error;
 
-            async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+            async fn from_request(req: HttpRequest<B>, state: &S) -> Result<Self, Self::Rejection> {
                 let QueryConfigQueryParams(query_config) = req.extract().await?;
                 Ok(Self { query_config })
             }
@@ -245,8 +261,8 @@ pub mod query {
     pub mod prepare {
         use async_trait::async_trait;
         use axum::{
-            extract::{FromRequest, Path, RequestParts},
-            http::uri,
+            extract::{FromRequest, Path},
+            http::{uri, Request as HttpRequest},
             Json,
         };
         use hyper::header::CONTENT_TYPE;
@@ -295,12 +311,14 @@ pub mod query {
         }
 
         #[async_trait]
-        impl FromRequest<hyper::Body> for Request {
+        impl<S, B> FromRequest<S, B> for Request
+        where
+            S: Send + Sync,
+            B: Send + 'static,
+        {
             type Rejection = Error;
 
-            async fn from_request(
-                req: &mut RequestParts<hyper::Body>,
-            ) -> Result<Self, Self::Rejection> {
+            async fn from_request(req: HttpRequest<B>, state: &S) -> Result<Self, Self::Rejection> {
                 let Path(query_id) = req.extract().await?;
                 let QueryConfigQueryParams(config) = req.extract().await?;
                 let Json(RequestBody { roles }) = req.extract().await?;
@@ -325,8 +343,8 @@ pub mod query {
     pub mod input {
         use async_trait::async_trait;
         use axum::{
-            extract::{FromRequest, Path, RequestParts},
-            http::uri,
+            extract::{FromRequest, Path},
+            http::{uri, Request as HttpRequest},
         };
         use hyper::{header::CONTENT_TYPE, Body};
 
@@ -368,10 +386,14 @@ pub mod query {
         }
 
         #[async_trait]
-        impl FromRequest<Body> for Request {
+        impl<S, B> FromRequest<S, B> for Request
+        where
+            S: Send + Sync,
+            B: Send + 'static,
+        {
             type Rejection = Error;
 
-            async fn from_request(req: &mut RequestParts<Body>) -> Result<Self, Self::Rejection> {
+            async fn from_request(req: HttpRequest<B>, state: &S) -> Result<Self, Self::Rejection> {
                 let Path(query_id) = req.extract().await?;
                 let input_stream = req.extract().await?;
 
@@ -390,12 +412,11 @@ pub mod query {
     pub mod step {
         use async_trait::async_trait;
         use axum::{
-            extract::{FromRequest, Path, RequestParts},
-            http::uri,
+            extract::{FromRequest, Path},
+            http::{uri, Request as HttpRequest},
         };
 
         use crate::{
-            helpers::BodyStream,
             net::{http_serde::query::BASE_AXUM_PATH, Error},
             protocol::{step::Gate, QueryId},
         };
@@ -442,19 +463,14 @@ pub mod query {
 
         /// Convert from axum request. Used on server side.
         #[async_trait]
-        impl<B> FromRequest<B> for Request<BodyStream>
+        impl<S, B> FromRequest<S, B> for Request<B>
         where
-            B: Send,
-            BodyStream: FromRequest<B>,
-            Error: From<<BodyStream as FromRequest<B>>::Rejection>,
+            S: Send + Sync,
+            B: Send + 'static,
         {
             type Rejection = Error;
 
-            // Rust pedantry: letting Rust infer the type parameter for the first `extract()` call
-            // from the LHS of the assignment kind of works, but it requires additional guidance (in
-            // the form of trait bounds on the impl) to see that PathRejection can be converted to
-            // Error. Writing `Path` twice somehow avoids that.
-            async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+            async fn from_request(req: HttpRequest<B>, state: &S) -> Result<Self, Self::Rejection> {
                 let Path((query_id, gate)) = req.extract::<Path<_>>().await?;
                 let body = req.extract().await?;
                 Ok(Self {
@@ -470,7 +486,10 @@ pub mod query {
 
     pub mod status {
         use async_trait::async_trait;
-        use axum::extract::{FromRequest, Path, RequestParts};
+        use axum::{
+            extract::{FromRequestParts, Path},
+            http::request::Parts,
+        };
         use serde::{Deserialize, Serialize};
 
         use crate::{
@@ -531,10 +550,16 @@ pub mod query {
         }
 
         #[async_trait]
-        impl<B: Send> FromRequest<B> for Request {
+        impl<S> FromRequestParts<S> for Request
+        where
+            S: Send + Sync,
+        {
             type Rejection = Error;
 
-            async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+            async fn from_request_parts(
+                req: &mut Parts,
+                state: &S,
+            ) -> Result<Self, Self::Rejection> {
                 let Path(query_id) = req.extract().await?;
                 Ok(Request { query_id })
             }
@@ -556,7 +581,10 @@ pub mod query {
 
     pub mod results {
         use async_trait::async_trait;
-        use axum::extract::{FromRequest, Path, RequestParts};
+        use axum::{
+            extract::{FromRequestParts, Path},
+            http::request::Parts,
+        };
 
         use crate::{
             helpers::{routing::RouteId, NoStep, RouteParams},
@@ -615,10 +643,16 @@ pub mod query {
         }
 
         #[async_trait]
-        impl<B: Send> FromRequest<B> for Request {
+        impl<S> FromRequestParts<S> for Request
+        where
+            S: Send + Sync,
+        {
             type Rejection = Error;
 
-            async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+            async fn from_request_parts(
+                req: &mut Parts,
+                state: &S,
+            ) -> Result<Self, Self::Rejection> {
                 let Path(query_id) = req.extract().await?;
                 Ok(Request { query_id })
             }

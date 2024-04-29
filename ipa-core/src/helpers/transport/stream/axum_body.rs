@@ -3,7 +3,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use axum::extract::{BodyStream, FromRequest, RequestParts};
+use axum::{
+        extract::{BodyStream, FromRequest, FromRequestParts},
+        http::Request as HttpRequest};
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use hyper::Body;
@@ -61,7 +63,7 @@ impl WrappedAxumBodyStream {
         // `BodyStream` never blocks, and it's not clear why it would need to, so it seems safe to
         // resolve the future with `now_or_never`.
         Self::new_internal(
-            futures::FutureExt::now_or_never(BodyStream::from_request(&mut RequestParts::new(
+            futures::FutureExt::now_or_never(BodyStream::from_request(&mut FromRequestParts::new(
                 hyper::Request::builder()
                     .uri("/ignored")
                     .body(body.into())
@@ -75,12 +77,12 @@ impl WrappedAxumBodyStream {
 
 #[cfg(feature = "real-world-infra")]
 #[async_trait::async_trait]
-impl<B: hyper::body::HttpBody<Data = bytes::Bytes, Error = hyper::Error> + Send + 'static>
-    FromRequest<B> for WrappedAxumBodyStream
+impl<S : Send + Sync, B: hyper::body::HttpBody<Data = bytes::Bytes, Error = hyper::Error> + Send + 'static>
+    FromRequest<S, B> for WrappedAxumBodyStream
 {
-    type Rejection = <BodyStream as FromRequest<B>>::Rejection;
+    type Rejection = <BodyStream as FromRequest<S, B>>::Rejection;
 
-    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: HttpRequest<B>, state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self::new_internal(req.extract::<BodyStream>().await?))
     }
 }
