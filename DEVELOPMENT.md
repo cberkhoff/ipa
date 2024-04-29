@@ -23,7 +23,9 @@ Simlifying the interactions a lot, The project users submit queries to the syste
 
 The main use case is to submit Advertiser (Miguel) or Publisher (Garibi Corp) queries through a tool called Reports Collector (the executable is [report_collector.rs](./ipa-core/src/bin/report_collector.rs)). This tool takes both Impressions and Conversions datasets and submits them to the helper network using the IPA client to join both datasets together and compute metrics and generate the report securely.
 
-Helpers can be seen as agents, each operating independently from the other in their network. Each Helper have 3 modes of operation; Waiting, Query Preparation and Computing. Helpers wait until a query comes, at which point they will parse the input and coordinate with other helpers in the network. Once helper nodes are ready, they start the computation until it's done and they go back to waiting. The executable is [helper.rs](./ipa-core/src/bin/helper.rs).
+Helpers can be seen as agents, each operating independently from the other in their network. Each Helper has 3 modes of operation; Waiting, Query Preparation and Computing. Helpers wait until a query comes, at which point they will coordinate with other helpers in the network. The server that receives the query becomes the query leader. If all helper nodes are ready, they accept the request, parse the inputs and carry out the computation. Once done they go back to waiting. The main executable for Helpers is [helper.rs](./ipa-core/src/bin/helper.rs).
+
+How is the input given to the other parties in the network?
 
 # Architecture 
 
@@ -31,13 +33,66 @@ Now we take a deeper dive into the modules in the IPA code exploring each of its
 
 ## Helper
 
+As mentioned before, there are two modes of operation for the helper. The `Inner` struct in [app.rs](./ipa-core/src/app.rs) contains two members to help with each, the `query_processor` and `mpc_transport` used for Query Preparation and Computation respectivelly.  We'll go over a hypothetical scenario on how a query is first received and then processed. Well ignore config for now.
+
+
+We use the same HTTP server both for connections from other helpers and for connections from clients (report collectors). Connections from other helpers require TLS authentication; connections from report collectors should not. Connections from report collectors should, but currently don't, have some other kind of authentication.
+
+API
+
+echo
+
+helpers/transport/routing
+pub enum RouteId {
+    Records,
+    ReceiveQuery,
+    PrepareQuery,
+    QueryInput,
+    QueryStatus,
+    CompleteQuery,
+}
+
+Role
+
+helpers/mod
+Represents a unique role of the helper inside the MPC circuit. Each helper may have different
+/// roles in queries it processes in parallel. For some queries it can be `H1` and for others it
+/// may be `H2` or `H3`.
+/// Each helper instance must be able to take any role, but once the role is assigned, it cannot
+/// be changed for the remainder of the query.
+
+H1 (leader), H2, H3
+
+directions: left right
+
+Route
+
+query_config:
+size
+field_type
+query_type
+
+prepare_query:
+query_id
+config
+roles
+
+query:
+create
+prepare
+input (data)
+step
+status
+results
+
+
+### By Layers
+
 We'll use the following diagram to describe the internals of the helper. On it, the boxes at the top use the boxes under them. Some of the boxes map to certain modules but not of them do. We refer to boxes in the diagram using the number next to them in parenthesis (e.g. (2) refers to Transport).
 
 ![Helper](./ipa-core/images/helper.drawio.png)
 
-As mentioned before, there are two modes of operation for the helper. The `Inner` struct in [app.rs](./ipa-core/src/app.rs) contains two members to help with each, the `query_processor` and `mpc_transport` used for Query Preparation and Computation respectivelly.  We'll go over a hypothetical scenario on how a query is first received and then processed. Well ignore config for now.
-
-The query processor (1) is defined in [processor.rs](ipa-core/src/query/processor.rs) in the larger [query module](ipa-core/src/query/mod.rs). It makes sure queries are coordinated and each party starts processing it when it has all the information required. The processor rustdoc explains the steps when a query is received.
+The query processor (1) is defined in [processor.rs](ipa-core/src/query/processor.rs) in the larger [query module](ipa-core/src/query/mod.rs). It makes sure queries are coordinated and each party starts processing it when it has all the information required. The Processor's Rustdoc explains the steps when a query is received in more detail.
 
 Query processor uses the [Transport] layer (2) which is a backend agnostic to send and receive information from other helpers. Transport exposes generic send and receive methods.
 
