@@ -40,6 +40,35 @@ We use the same HTTP server both for connections from other helpers and for conn
 
 API
 
+net/server/handlers/query/mod
+
+/// Construct router for IPA query web service
+///
+/// In principle, this web service could be backed by either an HTTP-interconnected helper network or
+/// an in-memory helper network. These are the APIs used by external callers (report collectors) to
+/// examine attribution results.
+pub fn query_router(transport: Arc<HttpTransport>) -> Router {
+    Router::new()
+        .merge(create::router(Arc::clone(&transport)))
+        .merge(input::router(Arc::clone(&transport)))
+        .merge(status::router(Arc::clone(&transport)))
+        .merge(results::router(transport))
+}
+
+/// Construct router for helper-to-helper communications
+///
+/// This only makes sense in the context of an HTTP-interconnected helper network. These APIs are
+/// called by peer helpers to exchange MPC step data, and by whichever helper is the leader for a
+/// particular query, to coordinate servicing that query.
+//
+// It might make sense to split the query and h2h handlers into two modules.
+pub fn h2h_router(transport: Arc<HttpTransport>) -> Router {
+    Router::new()
+        .merge(prepare::router(Arc::clone(&transport)))
+        .merge(step::router(transport))
+        .layer(layer_fn(HelperAuthentication::new))
+}
+
 echo
 
 helpers/transport/routing
