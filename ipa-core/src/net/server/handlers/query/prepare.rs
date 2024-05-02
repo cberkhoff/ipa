@@ -1,4 +1,4 @@
-use axum::{response::IntoResponse, routing::post, Extension, Router};
+use axum::{debug_handler, response::IntoResponse, routing::post, Extension, Router};
 use hyper::StatusCode;
 
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
 
 /// Called by whichever peer helper is the leader for an individual query, to initiatialize
 /// processing of that query.
+#[debug_handler]
 async fn handler(
     transport: Extension<Arc<HttpTransport>>,
     _: Extension<ClientIdentity>, // require that client is an authenticated helper

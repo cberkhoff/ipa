@@ -5,7 +5,7 @@ use std::{
 
 use axum::{
         extract::{BodyStream, FromRequest, FromRequestParts},
-        http::Request as HttpRequest};
+        http::Request as HttpRequest, http::request::Parts};
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use hyper::Body;
@@ -63,7 +63,7 @@ impl WrappedAxumBodyStream {
         // `BodyStream` never blocks, and it's not clear why it would need to, so it seems safe to
         // resolve the future with `now_or_never`.
         Self::new_internal(
-            futures::FutureExt::now_or_never(BodyStream::from_request(&mut FromRequestParts::new(
+            futures::FutureExt::now_or_never(BodyStream::from_request(&mut Parts::new(
                 hyper::Request::builder()
                     .uri("/ignored")
                     .body(body.into())
