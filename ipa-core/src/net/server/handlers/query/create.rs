@@ -3,7 +3,10 @@ use hyper::StatusCode;
 
 use crate::{
     helpers::{ApiError, BodyStream, Transport},
-    net::{http_serde, Error, HttpTransport},
+    net::{
+        http_serde::{self, query::QueryConfigQueryParams},
+        Error, HttpTransport,
+    },
     query::NewQueryError,
     sync::Arc,
 };
@@ -12,13 +15,10 @@ use crate::{
 /// to the [`HttpTransport`].
 async fn handler(
     transport: Extension<Arc<HttpTransport>>,
-    req: http_serde::query::create::Request,
+    QueryConfigQueryParams(query_config): QueryConfigQueryParams,
 ) -> Result<Json<http_serde::query::create::ResponseBody>, Error> {
     let transport = Transport::clone_ref(&*transport);
-    match transport
-        .dispatch(req.query_config, BodyStream::empty())
-        .await
-    {
+    match transport.dispatch(query_config, BodyStream::empty()).await {
         Ok(resp) => Ok(Json(resp.try_into()?)),
         Err(err @ ApiError::NewQuery(NewQueryError::State { .. })) => {
             Err(Error::application(StatusCode::CONFLICT, err))

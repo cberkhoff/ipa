@@ -2,7 +2,9 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-use axum::http::Request as HttpRequest;
+
+#[cfg(all(feature = "in-memory-infra", feature = "web-app"))]
+use axum::{http::Request as HttpRequest, RequestExt};
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream};
 
@@ -52,12 +54,14 @@ impl<Buf: Into<bytes::Bytes>> From<Buf> for WrappedBoxBodyStream {
 
 #[cfg(all(feature = "in-memory-infra", feature = "web-app"))]
 #[async_trait::async_trait]
-impl<S: Send + Sync, B: hyper::body::HttpBody<Data = bytes::Bytes, Error = hyper::Error> + Send + 'static>
-    axum::extract::FromRequest<S, B> for WrappedBoxBodyStream
+impl<
+        S: Send + Sync,
+        B: hyper::body::HttpBody<Data = bytes::Bytes, Error = hyper::Error> + Send + 'static,
+    > axum::extract::FromRequest<S, B> for WrappedBoxBodyStream
 {
     type Rejection = <axum::extract::BodyStream as axum::extract::FromRequest<S, B>>::Rejection;
 
-    async fn from_request(req: HttpRequest<B>, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: HttpRequest<B>, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self::new(req.extract().await?))
     }
 }

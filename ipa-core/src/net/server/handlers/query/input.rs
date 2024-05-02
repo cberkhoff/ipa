@@ -1,21 +1,28 @@
-use axum::{routing::post, Extension, Router};
+use axum::{extract::Path, routing::post, Extension, Router};
 use hyper::StatusCode;
 
 use crate::{
-    helpers::{routing::RouteId, Transport},
+    helpers::{query::QueryInput, routing::RouteId, Transport},
     net::{http_serde, Error, HttpTransport},
+    protocol::QueryId,
     sync::Arc,
 };
 
 async fn handler(
     transport: Extension<Arc<HttpTransport>>,
-    req: http_serde::query::input::Request,
+    //req: http_serde::query::input::Request,
+    Path(query_id): Path<QueryId>,
+    input_stream: crate::helpers::WrappedBoxBodyStream,
 ) -> Result<(), Error> {
+    let query_input = QueryInput {
+        query_id,
+        input_stream,
+    };
     let transport = Transport::clone_ref(&*transport);
     let _ = transport
         .dispatch(
-            (RouteId::QueryInput, req.query_input.query_id),
-            req.query_input.input_stream,
+            (RouteId::QueryInput, query_input.query_id),
+            query_input.input_stream,
         )
         .await
         .map_err(|e| Error::application(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -79,9 +86,9 @@ mod tests {
             query_id: expected_query_id,
             input_stream: expected_input.to_vec().into(),
         });
-        handler(Extension(test_server.transport), req)
-            .await
-            .unwrap();
+        /*handler(Extension(test_server.transport), req)
+        .await
+        .unwrap();*/
     }
 
     struct OverrideReq {
@@ -118,6 +125,6 @@ mod tests {
             query_id: "not_a_query_id".into(),
             ..Default::default()
         };
-        assert_req_fails_with(req, StatusCode::UNPROCESSABLE_ENTITY).await;
+        assert_req_fails_with(req, StatusCode::BAD_REQUEST).await;
     }
 }

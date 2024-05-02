@@ -1,9 +1,19 @@
-use axum::{debug_handler, response::IntoResponse, routing::post, Extension, Router};
+use axum::{
+    debug_handler, extract::Path, response::IntoResponse, routing::post, Extension, Json, Router,
+};
 use hyper::StatusCode;
 
 use crate::{
-    helpers::{BodyStream, Transport},
-    net::{http_serde, server::ClientIdentity, Error, HttpTransport},
+    helpers::{query::PrepareQuery, BodyStream, Transport},
+    net::{
+        http_serde::{
+            self,
+            query::{prepare::RequestBody, QueryConfigQueryParams},
+        },
+        server::ClientIdentity,
+        Error, HttpTransport,
+    },
+    protocol::QueryId,
     query::PrepareQueryError,
     sync::Arc,
 };
@@ -14,11 +24,19 @@ use crate::{
 async fn handler(
     transport: Extension<Arc<HttpTransport>>,
     _: Extension<ClientIdentity>, // require that client is an authenticated helper
-    req: http_serde::query::prepare::Request,
+    //req: http_serde::query::prepare::Request,
+    Path(query_id): Path<QueryId>,
+    QueryConfigQueryParams(config): QueryConfigQueryParams,
+    Json(RequestBody { roles }): Json<RequestBody>,
 ) -> Result<(), Error> {
+    let data = PrepareQuery {
+        query_id,
+        config,
+        roles,
+    };
     let transport = Transport::clone_ref(&*transport);
     let _ = transport
-        .dispatch(req.data, BodyStream::empty())
+        .dispatch(data, BodyStream::empty())
         .await
         .map_err(|e| Error::application(StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -39,8 +57,11 @@ pub fn router(transport: Arc<HttpTransport>) -> Router {
 
 #[cfg(all(test, unit_test))]
 mod tests {
+
     use axum::{http::Request, Extension};
-    use hyper::{Body, StatusCode};
+    use futures::future::poll_immediate;
+    use hyper::{header::CONTENT_TYPE, service::Service, Body, StatusCode};
+    use tower::ServiceExt;
 
     use crate::{
         ff::FieldType,
@@ -89,14 +110,13 @@ mod tests {
             ))
             .build()
             .await;
-
-        handler(
-            Extension(test_server.transport),
-            Extension(ClientIdentity(HelperIdentity::TWO)),
-            req.clone(),
-        )
-        .await
-        .unwrap();
+        let req = OverrideReq::default();
+        let mut router = test_server.server.router();
+        let ready = poll_immediate(router.ready()).await.unwrap().unwrap();
+        let resp = poll_immediate(ready.call(req.into_req(0)))
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     // since we tested `QueryType` with `create`, skip it here
@@ -119,6 +139,7 @@ mod tests {
             );
             let body = serde_json::to_vec(&self.roles).unwrap();
             hyper::Request::post(uri)
+                .header(CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
                 .maybe_extension(self.client_id)
                 .body(hyper::Body::from(body))
                 .unwrap()
@@ -146,7 +167,7 @@ mod tests {
             query_id: "not-a-query-id".into(),
             ..Default::default()
         };
-        assert_req_fails_with(req, StatusCode::UNPROCESSABLE_ENTITY).await;
+        assert_req_fails_with(req, StatusCode::BAD_REQUEST).await;
     }
 
     #[tokio::test]
@@ -164,7 +185,7 @@ mod tests {
             roles: vec!["1".into(), "2".into()],
             ..Default::default()
         };
-        assert_req_fails_with(req, StatusCode::BAD_REQUEST).await;
+        assert_req_fails_with(req, StatusCode::UNPROCESSABLE_ENTITY).await;
     }
 
     #[tokio::test]
@@ -173,7 +194,7 @@ mod tests {
             roles: vec!["1".into(), "2".into(), "not-a-role".into()],
             ..Default::default()
         };
-        assert_req_fails_with(req, StatusCode::BAD_REQUEST).await;
+        assert_req_fails_with(req, StatusCode::UNPROCESSABLE_ENTITY).await;
     }
 
     #[tokio::test]

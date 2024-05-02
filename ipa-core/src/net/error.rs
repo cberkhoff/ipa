@@ -149,7 +149,6 @@ impl IntoResponse for Error {
             | Self::HyperHttpPassthrough(_)
             | Self::FailedHttpRequest { .. }
             | Self::InvalidUri(_)
-            | Self::BodyAlreadyExtracted(_)
             | Self::MissingExtension(_) => StatusCode::INTERNAL_SERVER_ERROR,
 
             Self::Application { code, .. } => code,

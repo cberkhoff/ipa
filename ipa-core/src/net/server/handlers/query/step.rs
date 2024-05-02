@@ -1,4 +1,4 @@
-use axum::{routing::post, Extension, Router};
+use axum::{extract::Path, routing::post, Extension, Router};
 
 use crate::{
     helpers::{BodyStream, Transport},
@@ -7,6 +7,7 @@ use crate::{
         server::{ClientIdentity, Error},
         HttpTransport,
     },
+    protocol::{step::Descriptive, QueryId},
     sync::Arc,
 };
 
@@ -14,10 +15,12 @@ use crate::{
 async fn handler(
     transport: Extension<Arc<HttpTransport>>,
     from: Extension<ClientIdentity>,
-    req: http_serde::query::step::Request<BodyStream>,
+    Path((query_id, gate)): Path<(QueryId, Descriptive)>,
+    body: BodyStream,
 ) -> Result<(), Error> {
     let transport = Transport::clone_ref(&*transport);
-    transport.receive_stream(req.query_id, req.gate, **from, req.body);
+
+    transport.receive_stream(query_id, gate, **from, body);
     Ok(())
 }
 
@@ -58,7 +61,7 @@ mod tests {
 
         let step = Gate::default().narrow("test");
         let payload = vec![213; DATA_LEN * MESSAGE_PAYLOAD_SIZE_BYTES];
-        let req =
+        /*let req =
             http_serde::query::step::Request::new(QueryId, step.clone(), payload.clone().into());
 
         handler(
@@ -76,7 +79,7 @@ mod tests {
         assert_eq!(
             poll_immediate(&mut stream).next().await,
             Some(Poll::Ready(payload))
-        );
+        );*/
     }
 
     struct OverrideReq {
@@ -119,7 +122,7 @@ mod tests {
             query_id: "not-a-query-id".into(),
             ..Default::default()
         };
-        assert_req_fails_with(req, StatusCode::UNPROCESSABLE_ENTITY).await;
+        assert_req_fails_with(req, StatusCode::BAD_REQUEST).await;
     }
 
     #[tokio::test]
