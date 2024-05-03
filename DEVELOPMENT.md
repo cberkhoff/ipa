@@ -23,9 +23,7 @@ Simlifying the interactions a lot, The project users submit queries to the syste
 
 The main use case is to submit Advertiser (Miguel) or Publisher (Garibi Corp) queries through a tool called Reports Collector (the executable is [report_collector.rs](./ipa-core/src/bin/report_collector.rs)). This tool takes both Impressions and Conversions datasets and submits them to the helper network using the IPA client to join both datasets together and compute metrics and generate the report securely.
 
-Helpers can be seen as agents, each operating independently from the other in their network. Each Helper has 3 modes of operation; Waiting, Query Preparation and Computing. Helpers wait until a query comes, at which point they will coordinate with other helpers in the network. The server that receives the query becomes the query leader. If all helper nodes are ready, they accept the request, parse the inputs and carry out the computation. Once done they go back to waiting. The main executable for Helpers is [helper.rs](./ipa-core/src/bin/helper.rs).
-
-How is the input given to the other parties in the network?
+Helpers can be seen as agents, each operating independently from the other in their network. Each Helper can be thought as a State Machine with the following 3 states; Waiting, Query Preparation and Computing. Helpers wait until a query comes, at which point they will coordinate with other helpers in the network. The server that receives the query becomes the query leader. If all helper nodes are ready, they accept the request, parse the inputs and carry out the computation. Once done they go back to waiting. The main executable for Helpers is [helper.rs](./ipa-core/src/bin/helper.rs).
 
 # Architecture 
 
