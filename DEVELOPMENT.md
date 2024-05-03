@@ -200,3 +200,7 @@ ioa
 no mocks, but in-memory infra
 small circuits
 Create keys and setups ports
+
+# Features Explanation
+
+in-memory for tests
