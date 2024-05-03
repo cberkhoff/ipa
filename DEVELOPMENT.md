@@ -197,5 +197,6 @@ Validation is cheap for semi-honest, malicious is expensive. Protocol chooses wh
 end to end integ tests that use bins
 for benches we have:
 ioa
+no mocks, but in-memory infra
 small circuits
 Create keys and setups ports
