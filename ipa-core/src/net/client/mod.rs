@@ -7,13 +7,19 @@ use std::{
     task::{ready, Context, Poll},
 };
 
-use axum::http::uri::{self, Parts, Scheme};
-use futures::{Stream, StreamExt};
-use hyper::{
-    body, client::HttpConnector, header::HeaderName, http::HeaderValue, Body, Client, Request,
-    Response, StatusCode, Uri,
+use axum::{
+    body::Body,
+    http::uri::{self, Parts, Scheme},
 };
+use bytes::Buf;
+use futures::Stream;
+use http_body_util::BodyExt;
+use hyper::{header::HeaderName, http::HeaderValue, Request, Response, StatusCode, Uri};
 use hyper_rustls::{ConfigBuilderExt, HttpsConnector, HttpsConnectorBuilder};
+use hyper_util::{
+    client::legacy::{connect::HttpConnector, Client},
+    rt::TokioExecutor,
+};
 use pin_project::pin_project;
 use rustls::RootCertStore;
 use tracing::error;
@@ -24,8 +30,7 @@ use crate::{
         PeerConfig,
     },
     helpers::{
-        query::{PrepareQuery, QueryConfig, QueryInput},
-        HelperIdentity,
+        query::{PrepareQuery, QueryConfig, QueryInput}, HelperIdentity,
     },
     net::{http_serde, server::HTTP_CLIENT_ID_HEADER, Error, CRYPTO_PROVIDER},
     protocol::{step::Gate, QueryId},
@@ -88,7 +93,7 @@ impl ClientIdentity {
 pub struct ResponseFuture<'a> {
     authority: &'a uri::Authority,
     #[pin]
-    inner: hyper::client::ResponseFuture,
+    inner: hyper_util::client::legacy::ResponseFuture,
 }
 
 /// Similar to [fut](ResponseFuture), wraps the response and keeps the URI authority for better
@@ -247,7 +252,8 @@ impl MpcHelperClient {
         auth_header: Option<(HeaderName, HeaderValue)>,
         conf: &C,
     ) -> Self {
-        let client = conf.configure(&mut Client::builder()).build(connector);
+        let mut hyper_client = Client::builder(TokioExecutor::new());
+        let client = conf.configure(&mut hyper_client).build(connector);
         let Parts {
             scheme: Some(scheme),
             authority: Some(authority),
@@ -286,10 +292,10 @@ impl MpcHelperClient {
         let resp = self.request(req).await?;
         let status = resp.status();
         if status.is_success() {
-            let result = hyper::body::to_bytes(resp.into_body()).await?;
+            let body = resp.into_body().collect().await?.aggregate();
             let http_serde::echo::Request {
                 mut query_params, ..
-            } = serde_json::from_slice(&result)?;
+            } = serde_json::from_reader(body.reader())?;
             // It is potentially confusing to synthesize a 500 error here, but
             // it doesn't seem worth creating an error variant just for this.
             query_params.remove(FOO).ok_or(Error::FailedHttpRequest {
@@ -323,9 +329,9 @@ impl MpcHelperClient {
         let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
         let resp = self.request(req).await?;
         if resp.status().is_success() {
-            let body_bytes = body::to_bytes(resp.into_body()).await?;
+            let body = resp.into_body().collect().await?.aggregate();
             let http_serde::query::create::ResponseBody { query_id } =
-                serde_json::from_slice(&body_bytes)?;
+                serde_json::from_reader(body.reader())?;
             Ok(query_id)
         } else {
             Err(Error::from_failed_resp(resp).await)
@@ -369,7 +375,7 @@ impl MpcHelperClient {
         gate: &Gate,
         data: S,
     ) -> Result<ResponseFuture, Error> {
-        let body = hyper::Body::wrap_stream::<_, _, Error>(data.map(Ok));
+        let body = axum::body::Body::from_stream(data);
         let req = http_serde::query::step::Request::new(query_id, gate.clone(), body);
         let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
         Ok(self.request(req))
@@ -389,9 +395,9 @@ impl MpcHelperClient {
 
         let resp = self.request(req).await?;
         if resp.status().is_success() {
-            let body_bytes = body::to_bytes(resp.into_body()).await?;
+            let body = resp.into_body().collect().await?.aggregate();
             let http_serde::query::status::ResponseBody { status } =
-                serde_json::from_slice(&body_bytes)?;
+                serde_json::from_reader(body.reader())?;
             Ok(status)
         } else {
             Err(Error::from_failed_resp(resp).await)
@@ -404,13 +410,13 @@ impl MpcHelperClient {
     /// ## Errors
     /// If the request has illegal arguments, or fails to deliver to helper
     #[cfg(any(all(test, not(feature = "shuttle")), feature = "cli"))]
-    pub async fn query_results(&self, query_id: QueryId) -> Result<body::Bytes, Error> {
+    pub async fn query_results(&self, query_id: QueryId) -> Result<bytes::Bytes, Error> {
         let req = http_serde::query::results::Request::new(query_id);
         let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
-
         let resp = self.request(req).await?;
         if resp.status().is_success() {
-            Ok(body::to_bytes(resp.into_body()).await?)
+            let body = resp.into_body().collect().await?.to_bytes();
+            Ok(body)
         } else {
             Err(Error::from_failed_resp(resp).await)
         }

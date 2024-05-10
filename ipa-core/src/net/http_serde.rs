@@ -14,13 +14,14 @@
 //! This module is organized into the submodules "echo" and "query" for their
 //! respective APIs. Each module might have a Request struct used by the client
 //! to provide request parameters using [`crate::transport`] types.
+
+type OutgoingRequest = Result<hyper::Request<axum::body::Body>, crate::net::Error>;
+
 pub mod echo {
     use std::collections::HashMap;
-
+    use axum::body::Body;
     use hyper::http::uri;
     use serde::{Deserialize, Serialize};
-
-    use crate::net::Error;
 
     #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct Request {
@@ -42,7 +43,7 @@ pub mod echo {
             self,
             scheme: uri::Scheme,
             authority: uri::Authority,
-        ) -> Result<hyper::Request<hyper::Body>, Error> {
+        ) -> crate::net::http_serde::OutgoingRequest {
             let qps = self
                 .query_params
                 .iter()
@@ -59,7 +60,7 @@ pub mod echo {
                 .headers
                 .into_iter()
                 .fold(hyper::Request::get(uri), |req, (k, v)| req.header(k, v));
-            Ok(req.body(hyper::Body::empty())?)
+            Ok(req.body(Body::empty())?)
         }
     }
 
@@ -169,15 +170,13 @@ pub mod query {
 
     pub mod create {
 
+        use axum::body::Body;
         use hyper::http::uri;
         use serde::{Deserialize, Serialize};
 
         use crate::{
             helpers::{query::QueryConfig, HelperResponse},
-            net::{
-                http_serde::query::{QueryConfigQueryParams, BASE_AXUM_PATH},
-                Error,
-            },
+            net::http_serde::query::{QueryConfigQueryParams, BASE_AXUM_PATH},
             protocol::QueryId,
         };
 
@@ -195,7 +194,7 @@ pub mod query {
                 self,
                 scheme: uri::Scheme,
                 authority: uri::Authority,
-            ) -> Result<hyper::Request<hyper::Body>, Error> {
+            ) -> crate::net::http_serde::OutgoingRequest {
                 let uri = uri::Builder::new()
                     .scheme(scheme)
                     .authority(authority)
@@ -205,7 +204,7 @@ pub mod query {
                         QueryConfigQueryParams(self.query_config)
                     ))
                     .build()?;
-                Ok(hyper::Request::post(uri).body(hyper::Body::empty())?)
+                Ok(hyper::Request::post(uri).body(Body::empty())?)
             }
         }
 
@@ -226,7 +225,7 @@ pub mod query {
     }
 
     pub mod prepare {
-        use axum::http::uri;
+        use axum:: http::uri;
         use hyper::header::CONTENT_TYPE;
         use serde::{Deserialize, Serialize};
 
@@ -234,7 +233,7 @@ pub mod query {
             helpers::{query::PrepareQuery, RoleAssignment},
             net::{
                 http_serde::query::{QueryConfigQueryParams, BASE_AXUM_PATH},
-                Error, APPLICATION_JSON,
+                APPLICATION_JSON,
             },
         };
 
@@ -251,7 +250,7 @@ pub mod query {
                 self,
                 scheme: uri::Scheme,
                 authority: uri::Authority,
-            ) -> Result<hyper::Request<hyper::Body>, Error> {
+            ) -> crate::net::http_serde::OutgoingRequest {
                 let uri = uri::Uri::builder()
                     .scheme(scheme)
                     .authority(authority)
@@ -265,7 +264,7 @@ pub mod query {
                 let body = RequestBody {
                     roles: self.data.roles,
                 };
-                let body = hyper::Body::from(serde_json::to_string(&body)?);
+                let body = http_body_util::Full::new(body);
                 Ok(hyper::Request::post(uri)
                     .header(CONTENT_TYPE, APPLICATION_JSON)
                     .body(body)?)
@@ -282,11 +281,12 @@ pub mod query {
 
     pub mod input {
         use axum::http::uri;
-        use hyper::{header::CONTENT_TYPE, Body};
+        use http_body_util::StreamBody as HttpStreamBody;
+        use hyper::header::CONTENT_TYPE;
 
         use crate::{
-            helpers::query::QueryInput,
-            net::{http_serde::query::BASE_AXUM_PATH, Error, APPLICATION_OCTET_STREAM},
+            helpers::{query::QueryInput, BodyStream},
+            net::{http_serde::query::BASE_AXUM_PATH, APPLICATION_OCTET_STREAM},
         };
 
         #[derive(Debug)]
@@ -299,12 +299,13 @@ pub mod query {
                 Self { query_input }
             }
 
-            #[allow(clippy::type_complexity)] // to be addressed in follow-up
+            //#[allow(clippy::type_complexity)]
             pub fn try_into_http_request(
                 self,
                 scheme: uri::Scheme,
                 authority: uri::Authority,
-            ) -> Result<hyper::Request<Body>, Error> {
+            ) -> crate::net::http_serde::OutgoingRequest
+            {
                 let uri = uri::Uri::builder()
                     .scheme(scheme)
                     .authority(authority)
@@ -314,7 +315,7 @@ pub mod query {
                         self.query_input.query_id.as_ref(),
                     ))
                     .build()?;
-                let body = Body::wrap_stream(self.query_input.input_stream);
+                let body = HttpStreamBody::new(self.query_input.input_stream);
                 Ok(hyper::Request::post(uri)
                     .header(CONTENT_TYPE, APPLICATION_OCTET_STREAM)
                     .body(body)?)
@@ -325,7 +326,8 @@ pub mod query {
     }
 
     pub mod step {
-        use axum::http::uri;
+        use axum::{body::Body, http::uri};
+        //use http_body_util::StreamBody as HttpStreamBody;
 
         use crate::{
             net::{http_serde::query::BASE_AXUM_PATH, Error},
@@ -352,12 +354,12 @@ pub mod query {
         }
 
         /// Convert to hyper request. Used on client side.
-        impl Request<hyper::Body> {
+        impl Request<Body> {
             pub fn try_into_http_request(
                 self,
                 scheme: uri::Scheme,
                 authority: uri::Authority,
-            ) -> Result<hyper::Request<hyper::Body>, Error> {
+            ) -> Result<hyper::Request<Body>, Error> {
                 let uri = uri::Uri::builder()
                     .scheme(scheme)
                     .authority(authority)
@@ -377,7 +379,6 @@ pub mod query {
 
     pub mod status {
         use serde::{Deserialize, Serialize};
-
         use crate::{
             helpers::{routing::RouteId, HelperResponse, NoStep, RouteParams},
             protocol::QueryId,
@@ -420,7 +421,7 @@ pub mod query {
                 self,
                 scheme: axum::http::uri::Scheme,
                 authority: axum::http::uri::Authority,
-            ) -> Result<hyper::Request<hyper::Body>, crate::net::Error> {
+            ) -> crate::net::http_serde::OutgoingRequest {
                 let uri = axum::http::uri::Uri::builder()
                     .scheme(scheme)
                     .authority(authority)
@@ -430,7 +431,7 @@ pub mod query {
                         self.query_id.as_ref()
                     ))
                     .build()?;
-                Ok(hyper::Request::get(uri).body(hyper::Body::empty())?)
+                Ok(hyper::Request::get(uri).body(axum::body::Body::empty())?)
             }
         }
 
@@ -490,7 +491,7 @@ pub mod query {
                 self,
                 scheme: axum::http::uri::Scheme,
                 authority: axum::http::uri::Authority,
-            ) -> Result<hyper::Request<hyper::Body>, crate::net::Error> {
+            ) -> crate::net::http_serde::OutgoingRequest {
                 let uri = axum::http::uri::Uri::builder()
                     .scheme(scheme)
                     .authority(authority)
@@ -500,7 +501,7 @@ pub mod query {
                         self.query_id.as_ref()
                     ))
                     .build()?;
-                Ok(hyper::Request::get(uri).body(hyper::Body::empty())?)
+                Ok(hyper::Request::get(uri).body(axum::body::Body::empty())?)
             }
         }
 

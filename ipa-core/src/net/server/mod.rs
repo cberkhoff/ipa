@@ -13,29 +13,31 @@ use ::tokio::{
     io::{AsyncRead, AsyncWrite},
 };
 use axum::{
+    body::Body,
     response::{IntoResponse, Response},
     routing::IntoMakeService,
     Router,
 };
 use axum_server::{
     accept::Accept,
-    service::{MakeServiceRef, SendService},
+    service::SendService,
     tls_rustls::{RustlsAcceptor, RustlsConfig},
-    Handle, HttpConfig, Server,
+    Handle, Server,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures::{
     future::{ready, BoxFuture, Either, Ready},
     Future, FutureExt,
 };
-use hyper::{header::HeaderName, server::conn::AddrStream, Request};
+use hyper::{body::Incoming, header::HeaderName, Request};
 use metrics::increment_counter;
 use rustls::{server::WebPkiClientVerifier, RootCertStore};
 use rustls_pki_types::CertificateDer;
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::future as tokio;
+use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
-use tower::{layer::layer_fn, Service};
+use tower::{layer::layer_fn, MakeService, Service};
 use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
@@ -130,8 +132,8 @@ impl MpcHelperServer {
 
         let svc = self.router().layer(
             TraceLayer::new_for_http()
-                .make_span_with(move |_request: &hyper::Request<hyper::Body>| tracing.make_span())
-                .on_request(|request: &hyper::Request<hyper::Body>, _: &Span| {
+                .make_span_with(move |_request: &hyper::Request<Body>| tracing.make_span())
+                .on_request(|request: &hyper::Request<Body>, _: &Span| {
                     increment_counter!(RequestProtocolVersion::from(request.version()));
                     increment_counter!(REQUESTS_RECEIVED);
                 }),
@@ -206,6 +208,8 @@ impl MpcHelperServer {
     }
 }
 
+/// Spawns a new server with the given configuration.
+/// This function glues Tower, Axum, Hyper and Axum-Server together, hence the trait bounds.
 #[allow(clippy::unused_async)]
 async fn spawn_server<A>(
     server: Server<A>,
@@ -213,25 +217,15 @@ async fn spawn_server<A>(
     svc: IntoMakeService<Router>,
 ) -> JoinHandle<()>
 where
-    A: Accept<
-            AddrStream,
-            <IntoMakeService<Router> as MakeServiceRef<
-                AddrStream,
-                hyper::Request<hyper::Body>,
-            >>::Service,
-        > + Clone
-        + Send
-        + Sync
-        + 'static,
+    A: Accept<TcpStream, Router> + Clone + Send + Sync + 'static,
     A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
-    A::Service: SendService<Request<hyper::Body>> + Send,
+    A::Service: SendService<Request<Incoming>> + Send + Service<Request<Incoming>>,
     A::Future: Send,
 {
     tokio::spawn({
         async move {
             server
                 // TODO: configuration
-                .http_config(HttpConfig::default())
                 .handle(handle)
                 .serve(svc)
                 .await

@@ -5,17 +5,19 @@ use std::{
 
 #[cfg(feature = "real-world-infra")]
 use axum::RequestExt;
-use axum::{
-    extract::{BodyStream, FromRequest},
-    http::Request,
-};
+use axum::{extract::FromRequest, http::Request};
+use bytes::Buf;
 use futures::{Stream, TryStreamExt};
-use hyper::Body;
+use http_body::Body;
+use http_body_util::{BodyStream, StreamBody};
 use pin_project::pin_project;
 
 use crate::error::BoxError;
 
-type AxumInner = futures::stream::MapErr<BodyStream, fn(axum::Error) -> crate::error::BoxError>;
+//type AxumInner = futures::stream::MapErr<BodyStream, fn(axum::Error) -> crate::error::BoxError>;
+
+/*type AxumInner = StreamBody;
+//dyn Body<Data = dyn Buf, Error = crate::net::Error>;
 
 /// This struct is a simple wrapper so that both in-memory-infra and real-world-infra have a
 /// unified interface for streams consumed by transport layer.
@@ -23,16 +25,16 @@ type AxumInner = futures::stream::MapErr<BodyStream, fn(axum::Error) -> crate::e
 pub struct WrappedAxumBodyStream(#[pin] AxumInner);
 
 impl WrappedAxumBodyStream {
-    /// Wrap an axum body stream, returning an instance of `crate::helpers::BodyStream`.
+    /// Wrap an axum body stream, returning an instance of [`crate::helpers::BodyStream`].
     ///
     /// In the real-world-infra configuration, that is the same as a `WrappedAxumBodyStream`.
     #[cfg(feature = "real-world-infra")]
     #[must_use]
-    pub fn new(inner: BodyStream) -> Self {
+    pub fn new(inner: AxumInner) -> Self {
         Self::new_internal(inner)
     }
 
-    pub(super) fn new_internal(inner: BodyStream) -> Self {
+    pub(super) fn new_internal(inner: AxumInner) -> Self {
         Self(inner.map_err(axum::Error::into_inner as fn(axum::Error) -> BoxError))
     }
 
@@ -43,11 +45,18 @@ impl WrappedAxumBodyStream {
 }
 
 impl Stream for WrappedAxumBodyStream {
-    type Item = <AxumInner as Stream>::Item;
+    type Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        todo!()
+    }
+
+
+    /*type Item = <AxumInner as Stream>::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.project().0.poll_next(cx)
-    }
+    }*/
 }
 
 // Note that it is possible (although unlikely) that `from_body` panics.
@@ -77,6 +86,7 @@ impl WrappedAxumBodyStream {
     }
 }
 
+
 #[cfg(feature = "real-world-infra")]
 #[async_trait::async_trait]
 impl<
@@ -90,3 +100,4 @@ impl<
         Ok(Self::new_internal(req.extract::<BodyStream, _>().await?))
     }
 }
+ */

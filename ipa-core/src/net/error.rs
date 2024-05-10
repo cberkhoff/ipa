@@ -75,7 +75,7 @@ impl Error {
         let status = resp.status();
         assert!(status.is_client_error() || status.is_server_error()); // must be failure
         let (endpoint, body) = resp.into_parts();
-        hyper::body::to_bytes(body)
+        axum::body::to_bytes(body, usize::MAX)
             .await
             .map_or_else(Into::into, |reason_bytes| Error::FailedHttpRequest {
                 dest: endpoint.to_string(),

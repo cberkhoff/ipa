@@ -6,9 +6,10 @@ mod input;
 
 use std::pin::Pin;
 
-#[cfg(feature = "web-app")]
-pub use axum_body::WrappedAxumBodyStream;
-pub use box_body::WrappedBoxBodyStream;
+use axum::body::BodyDataStream;
+//#[cfg(feature = "web-app")]
+//pub use axum_body::WrappedAxumBodyStream;
+//pub use box_body::WrappedBoxBodyStream;
 use bytes::Bytes;
 pub use collection::{StreamCollection, StreamKey};
 use futures::Stream;
@@ -41,7 +42,25 @@ pub type BoxBytesStream = Pin<Box<dyn BytesStream>>;
 //  * Reducing the number of places we depend on axum types.
 //  * Avoiding an extra level of boxing in the production configuration using axum, since
 //    the axum body stream type is already a `Pin<Box<dyn HttpBody>>`.
-#[cfg(feature = "in-memory-infra")]
-pub type BodyStream = WrappedBoxBodyStream;
-#[cfg(feature = "real-world-infra")]
-pub type BodyStream = WrappedAxumBodyStream;
+//#[cfg(feature = "in-memory-infra")]
+//pub type BodyStream = WrappedBoxBodyStream;
+//#[cfg(feature = "real-world-infra")]
+//pub type BodyStream = BodyDataStream;
+
+/*impl Stream for WrappedBoxBodyStream {
+    type Item = <BoxBytesStream as Stream>::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let p = self.0.as_mut();
+        p.poll_next(cx)
+    }
+}
+
+#[cfg(any(test, feature = "test-fixture"))]
+impl<Buf: Into<bytes::Bytes>> From<Buf> for WrappedBoxBodyStream {
+    fn from(buf: Buf) -> Self {
+        Self(Box::pin(futures::stream::once(futures::future::ready(Ok(
+            buf.into(),
+        )))))
+    }
+} */

@@ -26,11 +26,11 @@ pub use handler::{
 #[cfg(feature = "in-memory-infra")]
 pub use in_memory::{InMemoryMpcNetwork, InMemoryShardNetwork, InMemoryTransport};
 pub use receive::{LogErrors, ReceiveRecords};
-#[cfg(feature = "web-app")]
-pub use stream::WrappedAxumBodyStream;
+//#[cfg(feature = "web-app")]
+//pub use stream::WrappedAxumBodyStream;
 pub use stream::{
     BodyStream, BytesStream, LengthDelimitedStream, RecordsStream, SingleRecordStream,
-    StreamCollection, StreamKey, WrappedBoxBodyStream,
+    StreamCollection, StreamKey, //WrappedBoxBodyStream,
 };
 
 use crate::{
