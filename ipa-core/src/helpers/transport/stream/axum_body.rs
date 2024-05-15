@@ -1,23 +1,19 @@
-use std::{
+/*use std::{
     pin::Pin,
     task::{Context, Poll},
 };
 
 #[cfg(feature = "real-world-infra")]
 use axum::RequestExt;
-use axum::{extract::FromRequest, http::Request};
+use axum::{body::Body, extract::FromRequest, http::Request};
 use bytes::Buf;
 use futures::{Stream, TryStreamExt};
-use http_body::Body;
 use http_body_util::{BodyStream, StreamBody};
 use pin_project::pin_project;
 
 use crate::error::BoxError;
 
-//type AxumInner = futures::stream::MapErr<BodyStream, fn(axum::Error) -> crate::error::BoxError>;
-
-/*type AxumInner = StreamBody;
-//dyn Body<Data = dyn Buf, Error = crate::net::Error>;
+type AxumInner = futures::stream::MapErr<BodyStream, fn(axum::Error) -> crate::error::BoxError>;
 
 /// This struct is a simple wrapper so that both in-memory-infra and real-world-infra have a
 /// unified interface for streams consumed by transport layer.
@@ -30,11 +26,11 @@ impl WrappedAxumBodyStream {
     /// In the real-world-infra configuration, that is the same as a `WrappedAxumBodyStream`.
     #[cfg(feature = "real-world-infra")]
     #[must_use]
-    pub fn new(inner: AxumInner) -> Self {
+    pub fn new(inner: Body) -> Self {
         Self::new_internal(inner)
     }
 
-    pub(super) fn new_internal(inner: AxumInner) -> Self {
+    pub(super) fn new_internal(inner: Body) -> Self {
         Self(inner.map_err(axum::Error::into_inner as fn(axum::Error) -> BoxError))
     }
 
@@ -45,18 +41,12 @@ impl WrappedAxumBodyStream {
 }
 
 impl Stream for WrappedAxumBodyStream {
-    type Item;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        todo!()
-    }
-
-
-    /*type Item = <AxumInner as Stream>::Item;
+    type Item = <AxumInner as Stream>::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.project().0.poll_next(cx)
-    }*/
+    }
 }
 
 // Note that it is possible (although unlikely) that `from_body` panics.
@@ -100,4 +90,4 @@ impl<
         Ok(Self::new_internal(req.extract::<BodyStream, _>().await?))
     }
 }
- */
+*/

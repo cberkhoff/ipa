@@ -225,7 +225,7 @@ pub mod query {
     }
 
     pub mod prepare {
-        use axum:: http::uri;
+        use axum::{body::Body,  http::uri};
         use hyper::header::CONTENT_TYPE;
         use serde::{Deserialize, Serialize};
 
@@ -264,7 +264,8 @@ pub mod query {
                 let body = RequestBody {
                     roles: self.data.roles,
                 };
-                let body = http_body_util::Full::new(body);
+                let body = serde_json::to_string(&body)?;
+                let body = Body::from(body);
                 Ok(hyper::Request::post(uri)
                     .header(CONTENT_TYPE, APPLICATION_JSON)
                     .body(body)?)
@@ -280,12 +281,11 @@ pub mod query {
     }
 
     pub mod input {
-        use axum::http::uri;
-        use http_body_util::StreamBody as HttpStreamBody;
+        use axum::{body::Body, http::uri};
         use hyper::header::CONTENT_TYPE;
 
         use crate::{
-            helpers::{query::QueryInput, BodyStream},
+            helpers::query::QueryInput,
             net::{http_serde::query::BASE_AXUM_PATH, APPLICATION_OCTET_STREAM},
         };
 
@@ -315,7 +315,7 @@ pub mod query {
                         self.query_input.query_id.as_ref(),
                     ))
                     .build()?;
-                let body = HttpStreamBody::new(self.query_input.input_stream);
+                let body = Body::from_stream(self.query_input.input_stream);
                 Ok(hyper::Request::post(uri)
                     .header(CONTENT_TYPE, APPLICATION_OCTET_STREAM)
                     .body(body)?)
@@ -327,7 +327,6 @@ pub mod query {
 
     pub mod step {
         use axum::{body::Body, http::uri};
-        //use http_body_util::StreamBody as HttpStreamBody;
 
         use crate::{
             net::{http_serde::query::BASE_AXUM_PATH, Error},

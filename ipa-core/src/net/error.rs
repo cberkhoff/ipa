@@ -19,6 +19,8 @@ pub enum Error {
     WrongBodyLen { body_len: u32, element_size: usize },
     #[error(transparent)]
     InvalidJsonBody(#[from] axum::extract::rejection::JsonRejection),
+    #[error(transparent)]
+    InvalidBytesBody(#[from] axum::extract::rejection::BytesRejection),
     #[error("bad path: {0}")]
     BadPathString(#[source] BoxError),
     #[error(transparent)]
@@ -53,7 +55,7 @@ pub enum Error {
     ConnectError {
         dest: String,
         #[source]
-        inner: hyper::Error,
+        inner: hyper_util::client::legacy::Error,
     },
     #[error("{error}")]
     Application { code: StatusCode, error: BoxError },
@@ -142,6 +144,7 @@ impl IntoResponse for Error {
             | Self::WrongBodyLen { .. }
             | Self::AxumPassthrough(_)
             | Self::InvalidJsonBody(_)
+            | Self::InvalidBytesBody(_)
             | Self::QueryIdNotFound(_)
             | Self::ConnectError { .. } => StatusCode::BAD_REQUEST,
 

@@ -8,11 +8,6 @@ use crate::{
     sync::Arc,
 };
 
-//#[cfg(feature = "real-world-infra")]
-//type WrappedBodyStream = crate::helpers::WrappedAxumBodyStream;
-//#[cfg(feature = "in-memory-infra")]
-//type WrappedBodyStream = crate::helpers::WrappedBoxBodyStream;
-
 async fn handler(
     transport: Extension<Arc<HttpTransport>>,
     Path(query_id): Path<QueryId>,

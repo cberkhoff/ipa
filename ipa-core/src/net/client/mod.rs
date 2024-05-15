@@ -11,9 +11,10 @@ use axum::{
     body::Body,
     http::uri::{self, Parts, Scheme},
 };
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 use futures::Stream;
 use http_body_util::BodyExt;
+use futures::stream::StreamExt;
 use hyper::{header::HeaderName, http::HeaderValue, Request, Response, StatusCode, Uri};
 use hyper_rustls::{ConfigBuilderExt, HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{
@@ -127,10 +128,13 @@ impl<'a> Future for ResponseFuture<'a> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         match ready!(this.inner.poll(cx)) {
-            Ok(resp) => Poll::Ready(Ok(ResponseFromEndpoint {
-                authority: this.authority,
-                inner: resp,
-            })),
+            Ok(resp) => { 
+                let (http_parts, http_body) = resp.into_parts();
+                let axum_resp = Response::from_parts(http_parts, Body::new(http_body));
+                Poll::Ready(Ok(ResponseFromEndpoint {
+                    authority: this.authority,
+                    inner: axum_resp,
+            }))},
             Err(e) => Poll::Ready(Err(Error::ConnectError {
                 dest: this.authority.to_string(),
                 inner: e,
@@ -362,6 +366,10 @@ impl MpcHelperClient {
         Self::resp_ok(resp).await
     }
 
+    fn vec_into_result_bytes(v: Vec<u8>) -> Result<Bytes, Error> {
+        Ok(Bytes::from(v))
+    }
+
     /// Sends a batch of messages associated with a query's step to another helper. Messages are a
     /// contiguous block of records. Also includes [`crate::protocol::RecordId`] information and
     /// [`crate::helpers::network::ChannelId`].
@@ -375,6 +383,8 @@ impl MpcHelperClient {
         gate: &Gate,
         data: S,
     ) -> Result<ResponseFuture, Error> {
+        
+        let data = data.map(Self::vec_into_result_bytes);
         let body = axum::body::Body::from_stream(data);
         let req = http_serde::query::step::Request::new(query_id, gate.clone(), body);
         let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;

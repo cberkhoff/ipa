@@ -37,7 +37,7 @@ use rustls_pki_types::CertificateDer;
 use shuttle::future as tokio;
 use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
-use tower::{layer::layer_fn, MakeService, Service};
+use tower::{layer::layer_fn, Service};
 use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
@@ -98,10 +98,9 @@ impl MpcHelperServer {
     }
 
     #[cfg(all(test, unit_test))]
-    async fn handle_req(&self, req: hyper::Request<hyper::Body>) -> axum::response::Response {
-        let mut router = self.router();
-        let router = tower::ServiceExt::ready(&mut router).await.unwrap();
-        hyper::service::Service::call(router, req).await.unwrap()
+    async fn handle_req(&self, req: hyper::Request<Body>) -> axum::response::Response {
+        use tower::ServiceExt;
+        self.router().oneshot(req).await.unwrap()
     }
 
     /// Starts the MPC helper service.
@@ -469,7 +468,10 @@ impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
 mod e2e_tests {
     use std::collections::HashMap;
 
-    use hyper::{client::HttpConnector, http::uri, StatusCode, Version};
+    use bytes::Buf;
+    use http_body_util::BodyExt;
+    use hyper_util::{client::legacy::{connect::HttpConnector, Client}, rt::TokioExecutor};
+    use hyper::{http::uri, StatusCode, Version};
     use hyper_rustls::HttpsConnector;
     use metrics_util::debugging::Snapshotter;
     use rustls::{
@@ -498,7 +500,7 @@ mod e2e_tests {
         expected: &http_serde::echo::Request,
         scheme: uri::Scheme,
         authority: String,
-    ) -> hyper::Request<hyper::Body> {
+    ) -> hyper::Request<Body> {
         expected
             .clone()
             .try_into_http_request(scheme, uri::Authority::try_from(authority).unwrap())
@@ -511,16 +513,16 @@ mod e2e_tests {
         let TestServer { addr, .. } = TestServer::builder().disable_https().build().await;
 
         // client
-        let client = hyper::Client::new();
+        let client = Client::builder(TokioExecutor::new()).build_http();
 
         // request
         let expected = expected_req(addr.to_string());
 
         let req = http_req(&expected, uri::Scheme::HTTP, addr.to_string());
-        let resp = client.request(req).await.unwrap();
+        let mut resp = client.request(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp_body = hyper::body::to_bytes(resp.into_body()).await.unwrap();
-        let resp_body: http_serde::echo::Request = serde_json::from_slice(&resp_body).unwrap();
+        let body = resp.body_mut().collect().await.unwrap().aggregate();
+        let resp_body: http_serde::echo::Request = serde_json::from_reader(body.reader()).unwrap();
         assert_eq!(expected, resp_body);
     }
 
@@ -584,15 +586,15 @@ mod e2e_tests {
         http.enforce_http(false);
 
         let https = HttpsConnector::<HttpConnector>::from((http, Arc::new(config)));
-        let client = hyper::Client::builder().build(https);
+        let client = Client::builder(TokioExecutor::new()).build(https);
 
         // request
         let expected = expected_req(authority.clone());
         let req = http_req(&expected, uri::Scheme::HTTPS, authority);
         let resp = client.request(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp_body = hyper::body::to_bytes(resp.into_body()).await.unwrap();
-        let resp_body: http_serde::echo::Request = serde_json::from_slice(&resp_body).unwrap();
+        let body = resp.into_body().collect().await.unwrap().aggregate();
+        let resp_body: http_serde::echo::Request = serde_json::from_reader(body.reader()).unwrap();
         assert_eq!(expected, resp_body);
     }
 
@@ -613,7 +615,7 @@ mod e2e_tests {
             .await;
 
         // client
-        let client = hyper::Client::new();
+        let client = Client::builder(TokioExecutor::new()).build_http();
 
         // request
         let expected = expected_req(addr.to_string());
@@ -649,13 +651,13 @@ mod e2e_tests {
         let expected = expected_req(addr.to_string());
 
         // make HTTP/1.1 request
-        let client = hyper::Client::new();
+        let client = Client::builder(TokioExecutor::new()).build_http();
         let req = http_req(&expected, uri::Scheme::HTTP, addr.to_string());
         let response = client.request(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
         // make HTTP/2 request
-        let client = hyper::Client::builder().http2_only(true).build_http();
+        let client = Client::builder(TokioExecutor::new()).http2_only(true).build_http();
         let req = http_req(&expected, uri::Scheme::HTTP, addr.to_string());
         let response = client.request(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
