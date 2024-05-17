@@ -134,9 +134,7 @@ mod tests {
                 f = val.field_type,
                 qt = val.query_type_params
             );
-            hyper::Request::post(uri)
-                .body(Body::empty())
-                .unwrap()
+            hyper::Request::post(uri).body(Body::empty()).unwrap()
         }
     }
 

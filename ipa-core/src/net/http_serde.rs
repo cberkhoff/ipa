@@ -19,6 +19,7 @@ type OutgoingRequest = Result<hyper::Request<axum::body::Body>, crate::net::Erro
 
 pub mod echo {
     use std::collections::HashMap;
+
     use axum::body::Body;
     use hyper::http::uri;
     use serde::{Deserialize, Serialize};
@@ -225,7 +226,7 @@ pub mod query {
     }
 
     pub mod prepare {
-        use axum::{body::Body,  http::uri};
+        use axum::{body::Body, http::uri};
         use hyper::header::CONTENT_TYPE;
         use serde::{Deserialize, Serialize};
 
@@ -304,8 +305,7 @@ pub mod query {
                 self,
                 scheme: uri::Scheme,
                 authority: uri::Authority,
-            ) -> crate::net::http_serde::OutgoingRequest
-            {
+            ) -> crate::net::http_serde::OutgoingRequest {
                 let uri = uri::Uri::builder()
                     .scheme(scheme)
                     .authority(authority)
@@ -378,6 +378,7 @@ pub mod query {
 
     pub mod status {
         use serde::{Deserialize, Serialize};
+
         use crate::{
             helpers::{routing::RouteId, HelperResponse, NoStep, RouteParams},
             protocol::QueryId,

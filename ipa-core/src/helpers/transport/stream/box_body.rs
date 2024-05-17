@@ -3,7 +3,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use axum::extract::FromRequest;
 use bytes::Bytes;
 use futures::{stream::StreamExt, Stream};
 
@@ -54,15 +53,19 @@ impl<Buf: Into<bytes::Bytes>> From<Buf> for WrappedBoxBodyStream {
 
 #[cfg(all(feature = "in-memory-infra", feature = "web-app"))]
 #[async_trait::async_trait]
-impl<S> FromRequest<S> for WrappedBoxBodyStream
+impl<S> axum::extract::FromRequest<S> for WrappedBoxBodyStream
 where
     S: Send + Sync,
 {
     type Rejection = crate::net::Error;
 
-    async fn from_request(req: axum::extract::Request , _state: &S) -> Result<Self, Self::Rejection> {
-        Bytes::from_request(req, _state).await
+    async fn from_request(
+        req: axum::extract::Request,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Bytes::from_request(req, _state)
+            .await
             .map(|bytes| Self::new(bytes))
-            .map_err(|e| crate::net::Error::InvalidBytesBody(e))        
+            .map_err(|e| crate::net::Error::InvalidBytesBody(e))
     }
 }

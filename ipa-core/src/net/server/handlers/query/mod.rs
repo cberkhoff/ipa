@@ -101,10 +101,11 @@ impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
 #[cfg(all(test, unit_test))]
 pub mod test_helpers {
     use std::{any::Any, io::Read, sync::Arc};
+
     use axum::body::Body;
     use bytes::Buf;
-    use hyper::{http::request, StatusCode};
     use http_body_util::BodyExt;
+    use hyper::{http::request, StatusCode};
 
     use crate::{
         helpers::{HelperIdentity, RequestHandler},
@@ -113,13 +114,15 @@ pub mod test_helpers {
 
     /// Helper trait for optionally adding an extension to a request.
     pub trait MaybeExtensionExt {
-        fn maybe_extension<T>(self, extension: Option<T>) -> Self 
-            where T: Any + Send + Sync + Clone + 'static;
+        fn maybe_extension<T>(self, extension: Option<T>) -> Self
+        where
+            T: Any + Send + Sync + Clone + 'static;
     }
 
     impl MaybeExtensionExt for request::Builder {
-        fn maybe_extension<T>(self, extension: Option<T>) -> Self 
-            where T: Any + Send + Sync + Clone + 'static
+        fn maybe_extension<T>(self, extension: Option<T>) -> Self
+        where
+            T: Any + Send + Sync + Clone + 'static,
         {
             if let Some(extension) = extension {
                 self.extension(extension)

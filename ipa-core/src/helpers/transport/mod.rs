@@ -29,8 +29,13 @@ pub use receive::{LogErrors, ReceiveRecords};
 //#[cfg(feature = "web-app")]
 //pub use stream::WrappedAxumBodyStream;
 pub use stream::{
-    BodyStream, BytesStream, LengthDelimitedStream, RecordsStream, SingleRecordStream,
-    StreamCollection, StreamKey, //WrappedBoxBodyStream,
+    BodyStream,
+    BytesStream,
+    LengthDelimitedStream,
+    RecordsStream,
+    SingleRecordStream,
+    StreamCollection,
+    StreamKey, //WrappedBoxBodyStream,
 };
 
 use crate::{

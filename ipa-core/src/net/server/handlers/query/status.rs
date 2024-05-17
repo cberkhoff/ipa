@@ -32,7 +32,10 @@ pub fn router(transport: Arc<HttpTransport>) -> Router {
 
 #[cfg(all(test, unit_test))]
 mod tests {
-    use axum::{body::Body, http::uri::{Authority, Scheme}};
+    use axum::{
+        body::Body,
+        http::uri::{Authority, Scheme},
+    };
     use hyper::StatusCode;
 
     use crate::{

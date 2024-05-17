@@ -12,9 +12,8 @@ use axum::{
     http::uri::{self, Parts, Scheme},
 };
 use bytes::{Buf, Bytes};
-use futures::Stream;
+use futures::{stream::StreamExt, Stream};
 use http_body_util::BodyExt;
-use futures::stream::StreamExt;
 use hyper::{header::HeaderName, http::HeaderValue, Request, Response, StatusCode, Uri};
 use hyper_rustls::{ConfigBuilderExt, HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::{
@@ -31,7 +30,8 @@ use crate::{
         PeerConfig,
     },
     helpers::{
-        query::{PrepareQuery, QueryConfig, QueryInput}, HelperIdentity,
+        query::{PrepareQuery, QueryConfig, QueryInput},
+        HelperIdentity,
     },
     net::{http_serde, server::HTTP_CLIENT_ID_HEADER, Error, CRYPTO_PROVIDER},
     protocol::{step::Gate, QueryId},
@@ -128,17 +128,49 @@ impl<'a> Future for ResponseFuture<'a> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         match ready!(this.inner.poll(cx)) {
-            Ok(resp) => { 
+            Ok(resp) => {
                 let (http_parts, http_body) = resp.into_parts();
                 let axum_resp = Response::from_parts(http_parts, Body::new(http_body));
                 Poll::Ready(Ok(ResponseFromEndpoint {
                     authority: this.authority,
                     inner: axum_resp,
-            }))},
+                }))
+            }
             Err(e) => Poll::Ready(Err(Error::ConnectError {
                 dest: this.authority.to_string(),
                 inner: e,
             })),
+        }
+    }
+}
+
+/// Future executor that utilises `tokio` threads.
+//#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct ClientTokioExecutor {
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl<Fut> hyper::rt::Executor<Fut> for ClientTokioExecutor
+where
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    fn execute(&self, fut: Fut) {
+        tokio::spawn(fut);
+    }
+}
+
+impl ClientTokioExecutor {
+    pub fn build() -> Self {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(3)
+            .thread_name("hyper-clients")
+            .enable_time()
+            .build()
+            .expect("Creating runtime failed");
+        Self {
+            runtime: Arc::new(rt),
         }
     }
 }
@@ -256,7 +288,9 @@ impl MpcHelperClient {
         auth_header: Option<(HeaderName, HeaderValue)>,
         conf: &C,
     ) -> Self {
-        let mut hyper_client = Client::builder(TokioExecutor::new());
+        //let te = ClientTokioExecutor::build();
+        let te = TokioExecutor::new();
+        let mut hyper_client = Client::builder(te);
         let client = conf.configure(&mut hyper_client).build(connector);
         let Parts {
             scheme: Some(scheme),
@@ -383,7 +417,6 @@ impl MpcHelperClient {
         gate: &Gate,
         data: S,
     ) -> Result<ResponseFuture, Error> {
-        
         let data = data.map(Self::vec_into_result_bytes);
         let body = axum::body::Body::from_stream(data);
         let req = http_serde::query::step::Request::new(query_id, gate.clone(), body);
