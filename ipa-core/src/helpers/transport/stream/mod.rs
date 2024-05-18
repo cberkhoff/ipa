@@ -5,7 +5,9 @@ mod collection;
 mod input;
 
 use std::pin::Pin;
-
+#[cfg(feature = "web-app")]
+pub use axum_body::WrappedAxumBodyStream;
+#[cfg(feature = "in-memory-infra")]
 pub use box_body::WrappedBoxBodyStream;
 use bytes::Bytes;
 pub use collection::{StreamCollection, StreamKey};
@@ -42,4 +44,4 @@ pub type BoxBytesStream = Pin<Box<dyn BytesStream>>;
 #[cfg(feature = "in-memory-infra")]
 pub type BodyStream = WrappedBoxBodyStream;
 #[cfg(feature = "real-world-infra")]
-pub type BodyStream = axum::body::Body;
+pub type BodyStream = WrappedAxumBodyStream;

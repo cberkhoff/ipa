@@ -281,16 +281,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{NetworkConfig, ServerConfig},
-        ff::{FieldType, Fp31, Serializable},
-        helpers::query::{QueryInput, QueryType::TestMultiply},
-        net::{
+        config::{NetworkConfig, ServerConfig}, error::BoxError, ff::{FieldType, Fp31, Serializable}, helpers::query::{QueryInput, QueryType::TestMultiply}, net::{
             client::ClientIdentity,
             test::{get_test_identity, TestConfig, TestConfigBuilder, TestServer},
-        },
-        secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares},
-        test_fixture::Reconstruct,
-        AppSetup, HelperApp,
+        }, secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares}, test_fixture::Reconstruct, AppSetup, HelperApp
     };
 
     static STEP: Lazy<Gate> = Lazy::new(|| Gate::from("http-transport"));
@@ -303,9 +297,10 @@ mod tests {
 
         let TestServer { transport, .. } = TestServer::default().await;
 
-        let body = BodyStream::from_body(
-            Box::new(ReceiverStream::new(rx)) as Box<dyn Stream<Item = _> + Send>
-        );
+        /*let body = BodyStream::from_boxed_stream(
+            Box::new(ReceiverStream::new(rx)) as Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>
+        );*/
+        let body = BodyStream::from_receiver_stream(Box::new(ReceiverStream::new(rx)));
 
         // Register the stream with the transport (normally called by step data HTTP API handler)
         Arc::clone(&transport).receive_stream(QueryId, STEP.clone(), HelperIdentity::TWO, body);
