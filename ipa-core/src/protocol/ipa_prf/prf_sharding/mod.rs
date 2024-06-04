@@ -15,7 +15,7 @@ use crate::{
     error::{Error, LengthError},
     ff::{
         boolean::Boolean,
-        boolean_array::{BA32, BA7},
+        boolean_array::{BA3, BA32, BA7, BA8},
         ArrayAccess, CustomArray, Expand, Field, U128Conversions,
     },
     helpers::{repeat_n, stream::TryFlattenItersExt},
@@ -46,12 +46,13 @@ use crate::{
         RecordId,
     },
     secret_sharing::{
-        replicated::{semi_honest::AdditiveShare as Replicated, ReplicatedSecretSharing},
-        BitDecomposed, FieldSimd, SharedValue, TransposeFrom,
+        replicated::{malicious::AdditiveShare, semi_honest::AdditiveShare as Replicated, ReplicatedSecretSharing}, BitDecomposed, FieldSimd, IntoShares, SharedValue, TransposeFrom
     },
     seq_join::{seq_join, SeqJoin},
     sharding::NotSharded,
 };
+
+use super::aggregation::breakdown_reveal::breakdown_reveal_aggregation;
 
 pub mod feature_label_dot_product;
 pub(crate) mod step;
@@ -464,7 +465,7 @@ where
 
     let attribution_validator = sh_ctx.narrow(&Step::Aggregate).validator::<Boolean>();
     let ctx = attribution_validator.context();
-    aggregate_contributions::<_, _, _, HV, B, AGG_CHUNK>(
+    breakdown_reveal_aggregation::<_, _, _, HV, B>(
         ctx,
         stream::iter(flattened_user_results),
         num_outputs,

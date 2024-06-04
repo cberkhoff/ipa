@@ -34,6 +34,7 @@ use crate::{
 
 mod bucket;
 pub(crate) mod step;
+pub(crate) mod breakdown_reveal;
 
 type AttributionOutputsChunk<const N: usize> = AttributionOutputs<
     BitDecomposed<Replicated<Boolean, N>>,
@@ -123,9 +124,9 @@ where
 // The output is `&[BitDecomposed<AdditiveShare<Boolean, {buckets}>>]`, indexed by
 // contribution rows, bits of trigger value, and buckets.
 pub async fn aggregate_contributions<'ctx, St, BK, TV, HV, const B: usize, const N: usize>(
-    ctx: UpgradedSemiHonestContext<'ctx, NotSharded, Boolean>,
-    contributions_stream: St,
-    contributions_stream_len: usize,
+    ctx: UpgradedSemiHonestContext<'ctx, NotSharded, Boolean>, // start with non-sharded
+    contributions_stream: St, // exact size stream??
+    contributions_stream_len: usize, // new trait for streams that know their size
 ) -> Result<Vec<Replicated<HV>>, Error>
 where
     St: Stream<Item = Result<AttributionOutputs<Replicated<BK>, Replicated<TV>>, Error>> + Send,
@@ -137,6 +138,7 @@ where
         BooleanProtocols<UpgradedSemiHonestContext<'ctx, NotSharded, Boolean>, B>,
     Replicated<BK>: BooleanArrayMul<UpgradedSemiHonestContext<'ctx, NotSharded, Boolean>>,
     Replicated<TV>: BooleanArrayMul<UpgradedSemiHonestContext<'ctx, NotSharded, Boolean>>,
+    
     BitDecomposed<Replicated<Boolean, N>>:
         for<'a> TransposeFrom<&'a Vec<Replicated<BK>>, Error = LengthError>,
     BitDecomposed<Replicated<Boolean, N>>:
@@ -208,6 +210,9 @@ where
 /// Aggregation is vectorized over histogram buckets, so bit 0 for every histogram bucket is stored
 /// contiguously, followed by bit 1 for each histogram bucket, etc.
 pub type AggResult<const B: usize> = Result<BitDecomposed<Replicated<Boolean, B>>, Error>;
+// this is like the state passed down in a reduce function (fold)
+// unvectorized this would be HV
+// This is vectorized by buckets.
 
 /// Aggregate output contributions
 ///

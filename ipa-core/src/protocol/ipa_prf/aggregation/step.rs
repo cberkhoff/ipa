@@ -2,6 +2,7 @@ use ipa_step_derive::CompactStep;
 
 #[derive(CompactStep)]
 pub(crate) enum AggregationStep {
+    RevealStep,
     #[step(child = BucketStep)]
     MoveToBucket,
     #[step(count = 32, child = AggregateValuesStep)]
@@ -19,6 +20,7 @@ impl From<usize> for BucketStep {
         Self(v)
     }
 }
+
 
 #[derive(CompactStep)]
 pub(crate) enum AggregateValuesStep {

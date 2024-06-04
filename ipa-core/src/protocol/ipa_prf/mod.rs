@@ -73,7 +73,7 @@ pub trait BreakdownKey<const MAX_BREAKDOWNS: usize>:
 {
 }
 impl BreakdownKey<32> for BA5 {}
-impl BreakdownKey<256> for BA8 {}
+impl BreakdownKey<256> for BA8 {} // these are the 2 size we support
 
 /// Vectorization dimension for PRF
 pub const PRF_CHUNK: usize = 64;
