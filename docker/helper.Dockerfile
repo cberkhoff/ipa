@@ -6,6 +6,7 @@ ARG SOURCES_DIR
 # Prepare helper binaries
 WORKDIR "$SOURCES_DIR"
 COPY . .
+RUN apt-get update &&  apt-get install -y libc6
 RUN set -eux; \
     cargo build --bin helper --release --no-default-features --features "web-app real-world-infra compact-gate"
 
