@@ -6,16 +6,7 @@ ARG SOURCES_DIR
 # Prepare helper binaries
 WORKDIR "$SOURCES_DIR"
 COPY . .
-RUN apt-get update &&  apt-get install -y libc6
 RUN set -eux; \
     cargo build --bin helper --release --no-default-features --features "web-app real-world-infra compact-gate"
 
-# Copy them to the final image
-FROM rust:slim-bookworm
-ENV HELPER_BIN_PATH=/usr/local/bin/ipa-helper
-ENV CONF_DIR=/etc/ipa
-ARG SOURCES_DIR
-
-RUN apt-get update &&  apt-get install -y ca-certificates libc6 && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder ${SOURCES_DIR}/target/release/helper $HELPER_BIN_PATH
+RUN apt-get update &&  apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
