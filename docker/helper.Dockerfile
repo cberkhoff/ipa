@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1
-ARG SOURCES_DIR=/usr/src/ipa
+# Builder
 FROM rust:bookworm AS builder
-ARG SOURCES_DIR
-
-# Prepare helper binaries
-WORKDIR "$SOURCES_DIR"
+WORKDIR /usr/src/ipa
 COPY . .
 RUN set -eux; \
-    cargo build --bin helper --release --no-default-features --features "web-app real-world-infra compact-gate"
+    cargo install --no-default-features --features "web-app real-world-infra compact-gate" --path ipa-core
 
+# Slimer runtime docker
+FROM rust:slim-bookworm
 RUN apt-get update &&  apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/cargo/bin/helper /usr/local/bin/ipa-helper
+
