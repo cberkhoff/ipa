@@ -16,7 +16,7 @@ use crate::{
         routing::{Addr, RouteId},
         ApiError, BodyStream, HandlerRef, HelperIdentity, HelperResponse, NoQueryId,
         NoResourceIdentifier, NoStep, QueryIdBinding, ReceiveRecords, RequestHandler, RouteParams,
-        StepBinding, StreamCollection, Transport,
+        StepBinding, StreamCollection, Transport, TransportIdentity,
     },
     net::{client::MpcHelperClient, error::Error, MpcHelperServer},
     protocol::{Gate, QueryId},
@@ -24,8 +24,20 @@ use crate::{
     sync::Arc,
 };
 
+pub struct HttpTransport<I: TransportIdentity> {
+    identity: I,
+    clients: Vec<MpcHelperClient>,
+    // TODO(615): supporting multiple queries likely require a hashmap here. It will be ok if we
+    // only allow one query at a time.
+    record_streams: StreamCollection<I, BodyStream>,
+    handler: Option<HandlerRef<I>>,
+}
+
 /// HTTP transport for IPA helper service.
 pub struct MpcHttpTransport {
+    inner_transport: HttpTransport<HelperIdentity>,
+
+    //
     identity: HelperIdentity,
     clients: [MpcHelperClient; 3],
     // TODO(615): supporting multiple queries likely require a hashmap here. It will be ok if we
@@ -35,8 +47,9 @@ pub struct MpcHttpTransport {
 }
 
 /// A stub for HTTP transport implementation, suitable for serviing inter-shard traffic
-#[derive(Clone, Default)]
-pub struct HttpShardTransport;
+pub struct HttpShardTransport {
+    inner_transport: HttpTransport<ShardIndex>,
+}
 
 impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
     type Params = String;
