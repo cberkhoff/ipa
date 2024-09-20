@@ -26,8 +26,8 @@ use tracing::error;
 
 use crate::{
     config::{
-        ClientConfig, HyperClientConfigurator, PeersConfig, OwnedCertificate, OwnedPrivateKey,
-        PeerConfig,
+        ClientConfig, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig,
+        PeersConfig,
     },
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
@@ -169,7 +169,8 @@ impl MpcHelperClient {
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn from_conf(conf: &PeersConfig, identity: &ClientIdentity) -> [MpcHelperClient; 3] {
-        conf.into_ring().each_ref()
+        conf.into_ring()
+            .each_ref()
             .map(|peer_conf| Self::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))
     }
 
