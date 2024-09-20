@@ -19,7 +19,7 @@ use ipa_core::{
         },
         CsvSerializer, IpaQueryResult, Verbosity,
     },
-    config::{KeyRegistries, PeersConfig},
+    config::{KeyRegistries, RingConfig},
     ff::{boolean_array::BA32, FieldType},
     helpers::query::{DpMechanism, IpaQueryConfig, QueryConfig, QuerySize, QueryType},
     net::MpcHelperClient,
@@ -380,7 +380,7 @@ async fn ipa(
 
 async fn ipa_test(
     args: &Args,
-    network: &PeersConfig,
+    network: &RingConfig,
     security_model: IpaSecurityModel,
     ipa_query_config: IpaQueryConfig,
     helper_clients: &[MpcHelperClient; 3],
