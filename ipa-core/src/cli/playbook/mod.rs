@@ -199,7 +199,7 @@ pub async fn make_clients(
         PeersConfig::from_toml_str(&fs::read_to_string(path).unwrap()).unwrap()
     } else {
         PeersConfig {
-            peers: [
+            peers: vec![
                 PeerConfig::new("localhost:3000".parse().unwrap(), None),
                 PeerConfig::new("localhost:3001".parse().unwrap(), None),
                 PeerConfig::new("localhost:3002".parse().unwrap(), None),

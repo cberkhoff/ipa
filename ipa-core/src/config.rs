@@ -37,7 +37,10 @@ pub enum Error {
     IOError(#[from] std::io::Error),
 }
 
-/// Configuration information describing a helper network.
+/// Configuration information describing a set of peers. In the non-sharded world it will be 3 
+/// helpers, together forming a network. In the sharded world there are 2 interpretations for this
+/// struct; 1) A ring of shards across separate helpers. 2) All the shards in a helper. This object
+/// can also contain all the peers in a network.
 ///
 /// The most important thing this contains is discovery information for each of the participating
 /// helpers.
@@ -46,7 +49,7 @@ pub struct PeersConfig {
     /// Information about each helper participating in the network. The order that helpers are
     /// listed here determines their assigned helper identities in the network. Note that while the
     /// helper identities are stable, roles are assigned per query.
-    pub peers: [PeerConfig; 3],
+    pub peers: Vec<PeerConfig>,
 
     /// HTTP client configuration.
     #[serde(default)]
@@ -71,11 +74,11 @@ impl PeersConfig {
     }
 
     pub fn new(peers: [PeerConfig; 3], client: ClientConfig) -> Self {
-        Self { peers, client }
+        Self { peers: peers.to_vec(), client }
     }
 
-    pub fn peers(&self) -> &[PeerConfig; 3] {
-        &self.peers
+    pub fn into_ring(&self) -> [PeerConfig; 3] {
+        self.peers.clone().try_into().unwrap()
     }
 
     // Can maybe be replaced with array::zip when stable?
@@ -92,7 +95,7 @@ impl PeersConfig {
     #[must_use]
     pub fn override_scheme(self, scheme: &Scheme) -> PeersConfig {
         PeersConfig {
-            peers: self.peers.map(|mut peer| {
+            peers: self.peers.into_iter().map(|mut peer| {
                 let mut parts = peer.url.into_parts();
                 parts.scheme = Some(scheme.clone());
                 // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
@@ -102,7 +105,7 @@ impl PeersConfig {
                 }
                 peer.url = Uri::try_from(parts).unwrap();
                 peer
-            }),
+            }).collect(),
             ..self
         }
     }
@@ -425,7 +428,7 @@ impl KeyRegistries {
         network: &PeersConfig,
     ) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
-        let configs = network.peers().iter().try_fold(Vec::new(), |acc, peer| {
+        let configs = network.peers.iter().try_fold(Vec::new(), |acc, peer| {
             if let (mut vec, Some(hpke_config)) = (acc, peer.hpke_config.as_ref()) {
                 vec.push(hpke_config);
                 Some(vec)
@@ -469,17 +472,17 @@ mod tests {
 
         let uri1 = URI_1.parse::<Uri>().unwrap();
         let id1 = HelperIdentity::try_from(1usize).unwrap();
-        let value1 = &conf.network.peers()[id1];
+        let value1 = &conf.network.peers[id1];
         assert_eq!(value1.url, uri1);
 
         let uri2 = URI_2.parse::<Uri>().unwrap();
         let id2 = HelperIdentity::try_from(2usize).unwrap();
-        let value2 = &conf.network.peers()[id2];
+        let value2 = &conf.network.peers[id2];
         assert_eq!(value2.url, uri2);
 
         let uri3 = URI_3.parse::<Uri>().unwrap();
         let id3 = HelperIdentity::try_from(3usize).unwrap();
-        let value3 = &conf.network.peers()[id3];
+        let value3 = &conf.network.peers[id3];
         assert_eq!(value3.url, uri3);
     }
 

@@ -279,7 +279,7 @@ async fn rustls_config(
 
     let mut trusted_certs = RootCertStore::empty();
     for cert in network
-        .peers()
+        .into_ring()
         .iter()
         .filter_map(|peer| peer.certificate.clone())
     {
