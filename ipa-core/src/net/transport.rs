@@ -25,8 +25,7 @@ use crate::{
 };
 
 /// HTTP transport for IPA helper service.
-/// TODO: rename to MPC
-pub struct HttpTransport {
+pub struct MpcHttpTransport {
     identity: HelperIdentity,
     clients: [MpcHelperClient; 3],
     // TODO(615): supporting multiple queries likely require a hashmap here. It will be ok if we
@@ -59,7 +58,7 @@ impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
     }
 }
 
-impl HttpTransport {
+impl MpcHttpTransport {
     #[must_use]
     pub fn new(
         identity: HelperIdentity,
@@ -108,7 +107,7 @@ impl HttpTransport {
         /// one query at a time and don't use query identifiers.
         #[pin_project(PinnedDrop)]
         struct ClearOnDrop<F: Future> {
-            transport: Arc<HttpTransport>,
+            transport: Arc<MpcHttpTransport>,
             #[pin]
             inner: F,
         }
@@ -162,7 +161,7 @@ impl HttpTransport {
 }
 
 #[async_trait]
-impl Transport for Arc<HttpTransport> {
+impl Transport for Arc<MpcHttpTransport> {
     type Identity = HelperIdentity;
     type RecordsStream = ReceiveRecords<HelperIdentity, BodyStream>;
     type Error = Error;
@@ -384,7 +383,7 @@ mod tests {
                     };
                     let (setup, handler) = AppSetup::new(AppConfig::default());
                     let clients = MpcHelperClient::from_conf(network_config, &identity);
-                    let (transport, server) = HttpTransport::new(
+                    let (transport, server) = MpcHttpTransport::new(
                         id,
                         server_config,
                         network_config.clone(),

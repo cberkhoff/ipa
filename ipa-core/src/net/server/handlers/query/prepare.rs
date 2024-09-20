@@ -9,7 +9,7 @@ use crate::{
             query::{prepare::RequestBody, QueryConfigQueryParams},
         },
         server::ClientIdentity,
-        Error, HttpTransport,
+        Error, MpcHttpTransport,
     },
     protocol::QueryId,
     query::PrepareQueryError,
@@ -19,7 +19,7 @@ use crate::{
 /// Called by whichever peer helper is the leader for an individual query, to initiatialize
 /// processing of that query.
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<Arc<MpcHttpTransport>>,
     _: Extension<ClientIdentity>, // require that client is an authenticated helper
     Path(query_id): Path<QueryId>,
     QueryConfigQueryParams(config): QueryConfigQueryParams,
@@ -45,7 +45,7 @@ impl IntoResponse for PrepareQueryError {
     }
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: Arc<MpcHttpTransport>) -> Router {
     Router::new()
         .route(http_serde::query::prepare::AXUM_PATH, post(handler))
         .layer(Extension(transport))

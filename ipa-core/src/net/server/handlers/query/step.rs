@@ -5,7 +5,7 @@ use crate::{
     net::{
         http_serde,
         server::{ClientIdentity, Error},
-        HttpTransport,
+        MpcHttpTransport,
     },
     protocol::{Gate, QueryId},
     sync::Arc,
@@ -14,7 +14,7 @@ use crate::{
 #[allow(clippy::unused_async)] // axum doesn't like synchronous handler
 #[tracing::instrument(level = "trace", "step", skip_all, fields(from = ?**from, gate = ?gate))]
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<Arc<MpcHttpTransport>>,
     from: Extension<ClientIdentity>,
     Path((query_id, gate)): Path<(QueryId, Gate)>,
     body: BodyStream,
@@ -24,7 +24,7 @@ async fn handler(
     Ok(())
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: Arc<MpcHttpTransport>) -> Router {
     Router::new()
         .route(http_serde::query::step::AXUM_PATH, post(handler))
         .layer(Extension(transport))

@@ -17,7 +17,7 @@ use ipa_core::{
     config::{hpke_registry, HpkeServerConfig, PeersConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
-    net::{ClientIdentity, HttpShardTransport, HttpTransport, MpcHelperClient},
+    net::{ClientIdentity, HttpShardTransport, MpcHttpTransport, MpcHelperClient},
     AppConfig, AppSetup,
 };
 use tracing::{error, info};
@@ -156,7 +156,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
         .override_scheme(&scheme);
     let clients = MpcHelperClient::from_conf(&network_config, &identity);
 
-    let (transport, server) = HttpTransport::new(
+    let (transport, server) = MpcHttpTransport::new(
         my_identity,
         server_config,
         network_config,

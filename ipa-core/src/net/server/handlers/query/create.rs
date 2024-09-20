@@ -5,7 +5,7 @@ use crate::{
     helpers::{ApiError, BodyStream, Transport},
     net::{
         http_serde::{self, query::QueryConfigQueryParams},
-        Error, HttpTransport,
+        Error, MpcHttpTransport,
     },
     query::NewQueryError,
     sync::Arc,
@@ -14,7 +14,7 @@ use crate::{
 /// Takes details from the HTTP request and creates a `[TransportCommand]::CreateQuery` that is sent
 /// to the [`HttpTransport`].
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<Arc<MpcHttpTransport>>,
     QueryConfigQueryParams(query_config): QueryConfigQueryParams,
 ) -> Result<Json<http_serde::query::create::ResponseBody>, Error> {
     let transport = Transport::clone_ref(&*transport);
@@ -27,7 +27,7 @@ async fn handler(
     }
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: Arc<MpcHttpTransport>) -> Router {
     Router::new()
         .route(http_serde::query::create::AXUM_PATH, post(handler))
         .layer(Extension(transport))

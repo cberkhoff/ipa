@@ -6,7 +6,7 @@ use crate::{
     net::{
         http_serde::{self, query::results::Request},
         server::Error,
-        HttpTransport,
+        MpcHttpTransport,
     },
     protocol::QueryId,
     sync::Arc,
@@ -14,7 +14,7 @@ use crate::{
 
 /// Handles the completion of the query by blocking the sender until query is completed.
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<Arc<MpcHttpTransport>>,
     Path(query_id): Path<QueryId>,
 ) -> Result<Vec<u8>, Error> {
     let req = Request { query_id };
@@ -26,7 +26,7 @@ async fn handler(
     }
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: Arc<MpcHttpTransport>) -> Router {
     Router::new()
         .route(http_serde::query::results::AXUM_PATH, get(handler))
         .layer(Extension(transport))

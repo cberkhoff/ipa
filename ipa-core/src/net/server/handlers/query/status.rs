@@ -6,14 +6,14 @@ use crate::{
     net::{
         http_serde::query::status::{self, Request},
         server::Error,
-        HttpTransport,
+        MpcHttpTransport,
     },
     protocol::QueryId,
     sync::Arc,
 };
 
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<Arc<MpcHttpTransport>>,
     Path(query_id): Path<QueryId>,
 ) -> Result<Json<status::ResponseBody>, Error> {
     let req = Request { query_id };
@@ -24,7 +24,7 @@ async fn handler(
     }
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: Arc<MpcHttpTransport>) -> Router {
     Router::new()
         .route(status::AXUM_PATH, get(handler))
         .layer(Extension(transport))
