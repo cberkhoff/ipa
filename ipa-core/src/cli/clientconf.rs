@@ -7,7 +7,7 @@ use toml::{Table, Value};
 
 use crate::{
     cli::paths::PathExt,
-    config::{ClientConfig, HpkeClientConfig, NetworkConfig, PeerConfig},
+    config::{ClientConfig, HpkeClientConfig, PeersConfig, PeerConfig},
     error::BoxError,
 };
 
@@ -178,7 +178,7 @@ fn encode_hpke(public_key: String) -> Table {
 /// [`NetworkConfig`]: NetworkConfig
 fn assert_network_config(config_toml: &Map<String, Value>, config_str: &str) {
     let nw_config =
-        NetworkConfig::from_toml_str(config_str).expect("Can deserialize network config");
+        PeersConfig::from_toml_str(config_str).expect("Can deserialize network config");
 
     let Value::Array(peer_config_expected) = config_toml
         .get("peers")

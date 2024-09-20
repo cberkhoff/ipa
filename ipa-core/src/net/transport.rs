@@ -10,7 +10,7 @@ use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
 use crate::{
-    config::{NetworkConfig, ServerConfig},
+    config::{PeersConfig, ServerConfig},
     helpers::{
         query::QueryConfig,
         routing::{Addr, RouteId},
@@ -64,7 +64,7 @@ impl HttpTransport {
     pub fn new(
         identity: HelperIdentity,
         server_config: ServerConfig,
-        network_config: NetworkConfig,
+        network_config: PeersConfig,
         clients: [MpcHelperClient; 3],
         handler: Option<HandlerRef>,
     ) -> (Arc<Self>, MpcHelperServer) {
@@ -281,7 +281,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{NetworkConfig, ServerConfig},
+        config::{PeersConfig, ServerConfig},
         ff::{FieldType, Fp31, Serializable},
         helpers::query::{QueryInput, QueryType::TestMultiply},
         net::{
@@ -341,7 +341,7 @@ mod tests {
     async fn make_helpers(
         sockets: [TcpListener; 3],
         server_config: [ServerConfig; 3],
-        network_config: &NetworkConfig,
+        network_config: &PeersConfig,
         disable_https: bool,
     ) -> [HelperApp; 3] {
         join_all(

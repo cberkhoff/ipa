@@ -42,7 +42,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{NetworkConfig, OwnedCertificate, OwnedPrivateKey, ServerConfig, TlsConfig},
+    config::{PeersConfig, OwnedCertificate, OwnedPrivateKey, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{
@@ -80,14 +80,14 @@ impl TracingSpanMaker for () {
 pub struct MpcHelperServer {
     transport: Arc<HttpTransport>,
     config: ServerConfig,
-    network_config: NetworkConfig,
+    network_config: PeersConfig,
 }
 
 impl MpcHelperServer {
     pub fn new(
         transport: Arc<HttpTransport>,
         config: ServerConfig,
-        network_config: NetworkConfig,
+        network_config: PeersConfig,
     ) -> Self {
         MpcHelperServer {
             transport,
@@ -273,7 +273,7 @@ async fn certificate_and_key(
 /// If there is a problem with the TLS configuration.
 async fn rustls_config(
     config: &ServerConfig,
-    network: &NetworkConfig,
+    network: &PeersConfig,
 ) -> Result<RustlsConfig, BoxError> {
     let (cert, key) = certificate_and_key(config).await?;
 
@@ -327,11 +327,11 @@ impl Deref for ClientIdentity {
 #[derive(Clone)]
 struct ClientCertRecognizingAcceptor {
     inner: RustlsAcceptor,
-    network_config: Arc<NetworkConfig>,
+    network_config: Arc<PeersConfig>,
 }
 
 impl ClientCertRecognizingAcceptor {
-    fn new(inner: RustlsAcceptor, network_config: NetworkConfig) -> Self {
+    fn new(inner: RustlsAcceptor, network_config: PeersConfig) -> Self {
         Self {
             inner,
             network_config: Arc::new(network_config),
@@ -340,7 +340,7 @@ impl ClientCertRecognizingAcceptor {
 
     // This can't be a method (at least not that takes `&self`) because it needs to go in a 'static future.
     fn identify_client(
-        network_config: &NetworkConfig,
+        network_config: &PeersConfig,
         cert_option: Option<&CertificateDer>,
     ) -> Option<ClientIdentity> {
         let cert = cert_option?;
