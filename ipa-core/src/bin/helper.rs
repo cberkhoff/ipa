@@ -17,7 +17,7 @@ use ipa_core::{
     config::{hpke_registry, HpkeServerConfig, PeersConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
-    net::{ClientIdentity, HttpShardTransport, MpcHttpTransport, MpcHelperClient},
+    net::{ClientIdentity, HttpShardTransport, MpcHelperClient, MpcHttpTransport},
     AppConfig, AppSetup,
 };
 use tracing::{error, info};

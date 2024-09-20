@@ -37,7 +37,7 @@ pub enum Error {
     IOError(#[from] std::io::Error),
 }
 
-/// Configuration information describing a set of peers. In the non-sharded world it will be 3 
+/// Configuration information describing a set of peers. In the non-sharded world it will be 3
 /// helpers, together forming a network. In the sharded world there are 2 interpretations for this
 /// struct; 1) A ring of shards across separate helpers. 2) All the shards in a helper. This object
 /// can also contain all the peers in a network.
@@ -74,7 +74,10 @@ impl PeersConfig {
     }
 
     pub fn new(peers: [PeerConfig; 3], client: ClientConfig) -> Self {
-        Self { peers: peers.to_vec(), client }
+        Self {
+            peers: peers.to_vec(),
+            client,
+        }
     }
 
     pub fn into_ring(&self) -> [PeerConfig; 3] {
@@ -95,17 +98,21 @@ impl PeersConfig {
     #[must_use]
     pub fn override_scheme(self, scheme: &Scheme) -> PeersConfig {
         PeersConfig {
-            peers: self.peers.into_iter().map(|mut peer| {
-                let mut parts = peer.url.into_parts();
-                parts.scheme = Some(scheme.clone());
-                // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
-                // scheme. If the URI does not have a scheme, it is not required to have a path.
-                if parts.path_and_query.is_none() {
-                    parts.path_and_query = Some("".parse().unwrap());
-                }
-                peer.url = Uri::try_from(parts).unwrap();
-                peer
-            }).collect(),
+            peers: self
+                .peers
+                .into_iter()
+                .map(|mut peer| {
+                    let mut parts = peer.url.into_parts();
+                    parts.scheme = Some(scheme.clone());
+                    // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
+                    // scheme. If the URI does not have a scheme, it is not required to have a path.
+                    if parts.path_and_query.is_none() {
+                        parts.path_and_query = Some("".parse().unwrap());
+                    }
+                    peer.url = Uri::try_from(parts).unwrap();
+                    peer
+                })
+                .collect(),
             ..self
         }
     }
@@ -423,10 +430,7 @@ pub struct KeyRegistries(Vec<KeyRegistry<PublicKeyOnly>>);
 impl KeyRegistries {
     /// # Panics
     /// If network file is improperly formatted
-    pub fn init_from(
-        &mut self,
-        network: &PeersConfig,
-    ) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
+    pub fn init_from(&mut self, network: &PeersConfig) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
         let configs = network.peers.iter().try_fold(Vec::new(), |acc, peer| {
             if let (mut vec, Some(hpke_config)) = (acc, peer.hpke_config.as_ref()) {

@@ -42,7 +42,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{PeersConfig, OwnedCertificate, OwnedPrivateKey, ServerConfig, TlsConfig},
+    config::{OwnedCertificate, OwnedPrivateKey, PeersConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{

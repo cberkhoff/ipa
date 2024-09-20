@@ -16,7 +16,7 @@ use tokio::time::sleep;
 
 pub use self::ipa::{playbook_oprf_ipa, run_query_and_validate};
 use crate::{
-    config::{ClientConfig, PeersConfig, PeerConfig},
+    config::{ClientConfig, PeerConfig, PeersConfig},
     ff::boolean_array::{BA20, BA3, BA8},
     helpers::query::DpMechanism,
     net::{ClientIdentity, MpcHelperClient},

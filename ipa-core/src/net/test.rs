@@ -19,12 +19,12 @@ use tokio::task::JoinHandle;
 
 use crate::{
     config::{
-        ClientConfig, HpkeClientConfig, HpkeServerConfig, PeersConfig, PeerConfig, ServerConfig,
+        ClientConfig, HpkeClientConfig, HpkeServerConfig, PeerConfig, PeersConfig, ServerConfig,
         TlsConfig,
     },
     helpers::{HandlerBox, HelperIdentity, RequestHandler},
     hpke::{Deserializable as _, IpaPublicKey},
-    net::{ClientIdentity, MpcHttpTransport, MpcHelperClient, MpcHelperServer},
+    net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport},
     sync::Arc,
     test_fixture::metrics::MetricsHandle,
 };
