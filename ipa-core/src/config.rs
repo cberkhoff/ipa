@@ -88,13 +88,6 @@ impl RingConfig {
         &self.peers
     }
 
-    /// # Panics
-    /// If unable to convert into an array of size 3.
-    #[must_use]
-    pub fn into_ring(&self) -> [PeerConfig; 3] {
-        self.peers.clone().try_into().unwrap()
-    }
-
     // Can maybe be replaced with array::zip when stable?
     pub fn enumerate_peers(
         &self,
