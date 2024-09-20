@@ -42,7 +42,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{OwnedCertificate, OwnedPrivateKey, PeersConfig, ServerConfig, TlsConfig},
+    config::{OwnedCertificate, OwnedPrivateKey, RingConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{
@@ -80,14 +80,14 @@ impl TracingSpanMaker for () {
 pub struct MpcHelperServer {
     transport: Arc<MpcHttpTransport>,
     config: ServerConfig,
-    network_config: PeersConfig,
+    network_config: RingConfig,
 }
 
 impl MpcHelperServer {
     pub fn new(
         transport: Arc<MpcHttpTransport>,
         config: ServerConfig,
-        network_config: PeersConfig,
+        network_config: RingConfig,
     ) -> Self {
         MpcHelperServer {
             transport,
@@ -273,13 +273,13 @@ async fn certificate_and_key(
 /// If there is a problem with the TLS configuration.
 async fn rustls_config(
     config: &ServerConfig,
-    network: &PeersConfig,
+    network: &RingConfig,
 ) -> Result<RustlsConfig, BoxError> {
     let (cert, key) = certificate_and_key(config).await?;
 
     let mut trusted_certs = RootCertStore::empty();
     for cert in network
-        .into_ring()
+        .peers()
         .iter()
         .filter_map(|peer| peer.certificate.clone())
     {
@@ -327,11 +327,11 @@ impl Deref for ClientIdentity {
 #[derive(Clone)]
 struct ClientCertRecognizingAcceptor {
     inner: RustlsAcceptor,
-    network_config: Arc<PeersConfig>,
+    network_config: Arc<RingConfig>,
 }
 
 impl ClientCertRecognizingAcceptor {
-    fn new(inner: RustlsAcceptor, network_config: PeersConfig) -> Self {
+    fn new(inner: RustlsAcceptor, network_config: RingConfig) -> Self {
         Self {
             inner,
             network_config: Arc::new(network_config),
@@ -340,7 +340,7 @@ impl ClientCertRecognizingAcceptor {
 
     // This can't be a method (at least not that takes `&self`) because it needs to go in a 'static future.
     fn identify_client(
-        network_config: &PeersConfig,
+        network_config: &RingConfig,
         cert_option: Option<&CertificateDer>,
     ) -> Option<ClientIdentity> {
         let cert = cert_option?;
