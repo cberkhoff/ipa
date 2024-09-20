@@ -110,16 +110,16 @@ impl RingConfig {
     pub fn override_scheme(self, scheme: &Scheme) -> RingConfig {
         RingConfig {
             peers: self.peers.map(|mut peer| {
-                    let mut parts = peer.url.into_parts();
-                    parts.scheme = Some(scheme.clone());
-                    // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
-                    // scheme. If the URI does not have a scheme, it is not required to have a path.
-                    if parts.path_and_query.is_none() {
-                        parts.path_and_query = Some("".parse().unwrap());
-                    }
-                    peer.url = Uri::try_from(parts).unwrap();
-                    peer
-                }),
+                let mut parts = peer.url.into_parts();
+                parts.scheme = Some(scheme.clone());
+                // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
+                // scheme. If the URI does not have a scheme, it is not required to have a path.
+                if parts.path_and_query.is_none() {
+                    parts.path_and_query = Some("".parse().unwrap());
+                }
+                peer.url = Uri::try_from(parts).unwrap();
+                peer
+            }),
             ..self
         }
     }
