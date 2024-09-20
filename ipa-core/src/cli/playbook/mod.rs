@@ -16,7 +16,7 @@ use tokio::time::sleep;
 
 pub use self::ipa::{playbook_oprf_ipa, run_query_and_validate};
 use crate::{
-    config::{ClientConfig, NetworkConfig, PeerConfig},
+    config::{ClientConfig, PeersConfig, PeerConfig},
     ff::boolean_array::{BA20, BA3, BA8},
     helpers::query::DpMechanism,
     net::{ClientIdentity, MpcHelperClient},
@@ -193,12 +193,12 @@ pub async fn make_clients(
     network_path: Option<&Path>,
     scheme: Scheme,
     wait: usize,
-) -> ([MpcHelperClient; 3], NetworkConfig) {
+) -> ([MpcHelperClient; 3], PeersConfig) {
     let mut wait = wait;
     let network = if let Some(path) = network_path {
-        NetworkConfig::from_toml_str(&fs::read_to_string(path).unwrap()).unwrap()
+        PeersConfig::from_toml_str(&fs::read_to_string(path).unwrap()).unwrap()
     } else {
-        NetworkConfig {
+        PeersConfig {
             peers: [
                 PeerConfig::new("localhost:3000".parse().unwrap(), None),
                 PeerConfig::new("localhost:3001".parse().unwrap(), None),

@@ -42,7 +42,7 @@ pub enum Error {
 /// The most important thing this contains is discovery information for each of the participating
 /// helpers.
 #[derive(Clone, Debug, Deserialize)]
-pub struct NetworkConfig {
+pub struct PeersConfig {
     /// Information about each helper participating in the network. The order that helpers are
     /// listed here determines their assigned helper identities in the network. Note that while the
     /// helper identities are stable, roles are assigned per query.
@@ -53,7 +53,7 @@ pub struct NetworkConfig {
     pub client: ClientConfig,
 }
 
-impl NetworkConfig {
+impl PeersConfig {
     /// Reads config from string. Expects config to be toml format.
     /// To read file, use `fs::read_to_string`
     ///
@@ -90,8 +90,8 @@ impl NetworkConfig {
     /// # Panics
     /// If `PathAndQuery::from_str("")` fails
     #[must_use]
-    pub fn override_scheme(self, scheme: &Scheme) -> NetworkConfig {
-        NetworkConfig {
+    pub fn override_scheme(self, scheme: &Scheme) -> PeersConfig {
+        PeersConfig {
             peers: self.peers.map(|mut peer| {
                 let mut parts = peer.url.into_parts();
                 parts.scheme = Some(scheme.clone());
@@ -422,7 +422,7 @@ impl KeyRegistries {
     /// If network file is improperly formatted
     pub fn init_from(
         &mut self,
-        network: &NetworkConfig,
+        network: &PeersConfig,
     ) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
         let configs = network.peers().iter().try_fold(Vec::new(), |acc, peer| {
