@@ -169,8 +169,7 @@ impl MpcHelperClient {
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn from_conf(conf: &PeersConfig, identity: &ClientIdentity) -> [MpcHelperClient; 3] {
-        conf.peers()
-            .each_ref()
+        conf.into_ring().each_ref()
             .map(|peer_conf| Self::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))
     }
 
