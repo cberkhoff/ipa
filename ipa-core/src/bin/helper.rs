@@ -14,10 +14,11 @@ use ipa_core::{
     cli::{
         client_config_setup, keygen, test_setup, ConfGenArgs, KeygenArgs, TestSetupArgs, Verbosity,
     },
-    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, TlsConfig},
+    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, ShardsConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{ClientIdentity, HttpShardTransport, MpcHelperClient, MpcHttpTransport},
+    sharding::ShardIndex,
     AppConfig, AppSetup,
 };
 use tracing::{error, info};
@@ -158,13 +159,20 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
 
     let (transport, server) = MpcHttpTransport::new(
         my_identity,
-        server_config,
-        network_config,
-        clients,
+        server_config.clone(),
+        network_config.clone(),
+        &clients,
         Some(handler),
     );
 
-    let _app = setup.connect(transport.clone(), HttpShardTransport);
+    /*let shards_config = ShardsConfig {
+        peers: vec![],
+        client: network_config.client,
+    };*/
+
+    let shard_transport = HttpShardTransport::new(ShardIndex(0u32), vec![], None);
+
+    let _app = setup.connect(transport.clone(), shard_transport);
 
     let listener = args.server_socket_fd
         .map(|fd| {

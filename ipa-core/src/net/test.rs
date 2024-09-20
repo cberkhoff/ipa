@@ -297,7 +297,7 @@ impl TestServerBuilder {
             HelperIdentity::ONE,
             server_config,
             network_config.clone(),
-            clients,
+            &clients,
             handler,
         );
         let (addr, handle) = server.start_on(Some(server_socket), self.metrics).await;
