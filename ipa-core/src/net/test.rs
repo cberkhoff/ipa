@@ -174,9 +174,7 @@ impl TestConfigBuilder {
                     ))
                 },
             })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+            .collect::<Vec<_>>();
         let network = PeersConfig {
             peers,
             client: self

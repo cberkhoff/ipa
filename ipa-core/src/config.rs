@@ -73,13 +73,16 @@ impl PeersConfig {
         Ok(conf)
     }
 
-    pub fn new(peers: [PeerConfig; 3], client: ClientConfig) -> Self {
+    pub fn new(peers: &[PeerConfig; 3], client: ClientConfig) -> Self {
         Self {
             peers: peers.to_vec(),
             client,
         }
     }
 
+    /// # Panics
+    /// If unable to convert into an array of size 3.
+    #[must_use]
     pub fn into_ring(&self) -> [PeerConfig; 3] {
         self.peers.clone().try_into().unwrap()
     }
