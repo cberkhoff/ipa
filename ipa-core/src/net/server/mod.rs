@@ -47,7 +47,7 @@ use crate::{
     helpers::HelperIdentity,
     net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
-        HttpTransport, CRYPTO_PROVIDER,
+        MpcHttpTransport, CRYPTO_PROVIDER,
     },
     sync::Arc,
     task::JoinHandle,
@@ -78,14 +78,14 @@ impl TracingSpanMaker for () {
 ///
 /// `MpcHelperServer` handles requests from both peer helpers and external clients.
 pub struct MpcHelperServer {
-    transport: Arc<HttpTransport>,
+    transport: Arc<MpcHttpTransport>,
     config: ServerConfig,
     network_config: PeersConfig,
 }
 
 impl MpcHelperServer {
     pub fn new(
-        transport: Arc<HttpTransport>,
+        transport: Arc<MpcHttpTransport>,
         config: ServerConfig,
         network_config: PeersConfig,
     ) -> Self {

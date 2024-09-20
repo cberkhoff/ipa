@@ -24,7 +24,7 @@ use crate::{
     },
     helpers::{HandlerBox, HelperIdentity, RequestHandler},
     hpke::{Deserializable as _, IpaPublicKey},
-    net::{ClientIdentity, HttpTransport, MpcHelperClient, MpcHelperServer},
+    net::{ClientIdentity, MpcHttpTransport, MpcHelperClient, MpcHelperServer},
     sync::Arc,
     test_fixture::metrics::MetricsHandle,
 };
@@ -202,7 +202,7 @@ impl TestConfigBuilder {
 pub struct TestServer {
     pub addr: SocketAddr,
     pub handle: JoinHandle<()>,
-    pub transport: Arc<HttpTransport>,
+    pub transport: Arc<MpcHttpTransport>,
     pub server: MpcHelperServer,
     pub client: MpcHelperClient,
     pub request_handler: Option<Arc<dyn RequestHandler<Identity = HelperIdentity>>>,
@@ -293,7 +293,7 @@ impl TestServerBuilder {
         };
         let clients = MpcHelperClient::from_conf(&network_config, &identity.clone_with_key());
         let handler = self.handler.as_ref().map(HandlerBox::owning_ref);
-        let (transport, server) = HttpTransport::new(
+        let (transport, server) = MpcHttpTransport::new(
             HelperIdentity::ONE,
             server_config,
             network_config.clone(),
