@@ -144,11 +144,6 @@ impl<'a> Future for ResponseFuture<'a> {
     }
 }
 
-pub struct ShardHelperClient {}
-
-#[allow(dead_code)]
-pub struct BaseHelperClient {}
-
 /// TODO: we need a client that can be used by any system that is not aware of the internals
 ///       of the helper network. That means that create query and send inputs API need to be
 ///       separated from prepare/step data etc.

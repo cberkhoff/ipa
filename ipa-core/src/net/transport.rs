@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    collections::HashMap,
     future::Future,
     pin::Pin,
     task::{Context, Poll},
@@ -9,7 +10,6 @@ use async_trait::async_trait;
 use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
-use super::client::ShardHelperClient;
 use crate::{
     config::{RingConfig, ServerConfig},
     helpers::{
@@ -25,22 +25,23 @@ use crate::{
     sync::Arc,
 };
 
-pub struct HttpTransport<I: TransportIdentity, C> {
+/// Shared implementation used by ['MpcHttpTransport'] and ['ShardHttpTransport']
+pub struct HttpTransport<I: TransportIdentity> {
     identity: I,
-    clients: Vec<C>,
+    clients: HashMap<I, MpcHelperClient>,
     record_streams: StreamCollection<I, BodyStream>,
     handler: Option<HandlerRef<I>>,
 }
 
-/// HTTP transport for IPA helper service.
+/// HTTP transport for helper to helper traffic.
 pub struct MpcHttpTransport {
-    inner_transport: HttpTransport<HelperIdentity, MpcHelperClient>,
+    inner_transport: HttpTransport<HelperIdentity>,
 }
 
-/// A stub for HTTP transport implementation, suitable for serviing inter-shard traffic
+/// A stub for HTTP transport implementation, suitable for serving inter-shard traffic
 pub struct HttpShardTransport {
     #[allow(dead_code)]
-    inner_transport: HttpTransport<ShardIndex, ShardHelperClient>,
+    inner_transport: HttpTransport<ShardIndex>,
 }
 
 impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
@@ -60,6 +61,66 @@ impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
 
     fn extra(&self) -> Self::Params {
         serde_json::to_string(self).unwrap()
+    }
+}
+
+impl<I: TransportIdentity> HttpTransport<I> {
+    async fn send<
+        D: Stream<Item = Vec<u8>> + Send + 'static,
+        Q: QueryIdBinding,
+        S: StepBinding,
+        R: RouteParams<RouteId, Q, S>,
+    >(
+        &self,
+        dest: &I,
+        route: R,
+        data: D,
+    ) -> Result<(), Error>
+    where
+        Option<QueryId>: From<Q>,
+        Option<Gate>: From<S>,
+    {
+        let route_id = route.resource_identifier();
+        match route_id {
+            RouteId::Records => {
+                // TODO(600): These fallible extractions aren't really necessary.
+                let query_id = <Option<QueryId>>::from(route.query_id())
+                    .expect("query_id required when sending records");
+                let step =
+                    <Option<Gate>>::from(route.gate()).expect("step required when sending records");
+                let resp_future = self.clients[dest].step(query_id, &step, data)?;
+                // we don't need to spawn a task here. Gateway's sender interface already does that
+                // so this can just poll this future.
+                resp_future
+                    .map_err(Into::into)
+                    .and_then(MpcHelperClient::resp_ok)
+                    .await?;
+                Ok(())
+            }
+            RouteId::PrepareQuery => {
+                let req = serde_json::from_str(route.extra().borrow()).unwrap();
+                self.clients[dest].prepare_query(req).await
+            }
+            evt @ (RouteId::QueryInput
+            | RouteId::ReceiveQuery
+            | RouteId::QueryStatus
+            | RouteId::CompleteQuery) => {
+                unimplemented!(
+                    "attempting to send client-specific request {evt:?} to another helper"
+                )
+            }
+        }
+    }
+
+    fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
+        &self,
+        from: I,
+        route: R,
+    ) -> ReceiveRecords<I, BodyStream> {
+        ReceiveRecords::new(
+            (route.query_id(), from, route.gate()),
+            self.record_streams.clone(),
+        )
     }
 }
 
@@ -172,10 +233,10 @@ impl MpcHttpTransport {
 #[async_trait]
 impl Transport for Arc<MpcHttpTransport> {
     type Identity = HelperIdentity;
-    type RecordsStream = ReceiveRecords<HelperIdentity, BodyStream>;
+    type RecordsStream = ReceiveRecords<Self::Identity, BodyStream>;
     type Error = Error;
 
-    fn identity(&self) -> HelperIdentity {
+    fn identity(&self) -> Self::Identity {
         self.inner_transport.identity
     }
 
@@ -186,7 +247,7 @@ impl Transport for Arc<MpcHttpTransport> {
         R: RouteParams<RouteId, Q, S>,
     >(
         &self,
-        dest: HelperIdentity,
+        dest: Self::Identity,
         route: R,
         data: D,
     ) -> Result<(), Error>
@@ -202,7 +263,8 @@ impl Transport for Arc<MpcHttpTransport> {
                     .expect("query_id required when sending records");
                 let step =
                     <Option<Gate>>::from(route.gate()).expect("step required when sending records");
-                let resp_future = self.inner_transport.clients[dest].step(query_id, &step, data)?;
+                let resp_future =
+                    self.inner_transport.clients[&dest].step(query_id, &step, data)?;
                 // we don't need to spawn a task here. Gateway's sender interface already does that
                 // so this can just poll this future.
                 resp_future
@@ -213,7 +275,7 @@ impl Transport for Arc<MpcHttpTransport> {
             }
             RouteId::PrepareQuery => {
                 let req = serde_json::from_str(route.extra().borrow()).unwrap();
-                self.inner_transport.clients[dest].prepare_query(req).await
+                self.inner_transport.clients[&dest].prepare_query(req).await
             }
             evt @ (RouteId::QueryInput
             | RouteId::ReceiveQuery
@@ -228,7 +290,7 @@ impl Transport for Arc<MpcHttpTransport> {
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
         &self,
-        from: HelperIdentity,
+        from: Self::Identity,
         route: R,
     ) -> Self::RecordsStream {
         ReceiveRecords::new(
@@ -244,7 +306,7 @@ impl HttpShardTransport {
         identity: ShardIndex,
         //server_config: ServerConfig,
         //network_config: ShardsConfig,
-        clients: Vec<ShardHelperClient>,
+        clients: Vec<MpcHelperClient>,
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> Arc<Self> {
         Self::new_internal(identity, clients, handler)
@@ -252,7 +314,7 @@ impl HttpShardTransport {
 
     fn new_internal(
         identity: ShardIndex,
-        clients: Vec<ShardHelperClient>,
+        clients: Vec<MpcHelperClient>,
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> Arc<Self> {
         Arc::new(Self {
