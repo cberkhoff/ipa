@@ -20,7 +20,7 @@ mod transport;
 pub use client::{ClientIdentity, MpcHelperClient};
 pub use error::Error;
 pub use server::{MpcHelperServer, TracingSpanMaker};
-pub use transport::{ShardHttpTransport, MpcHttpTransport};
+pub use transport::{MpcHttpTransport, ShardHttpTransport};
 
 pub const APPLICATION_JSON: &str = "application/json";
 pub const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";

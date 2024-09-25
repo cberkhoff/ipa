@@ -16,21 +16,18 @@ use futures_util::{
 use hyper::{Request, StatusCode};
 use tower::{layer::layer_fn, Service};
 
-use crate::{
-    net::{server::ClientIdentity, MpcHttpTransport},
-    sync::Arc,
-};
+use crate::net::{server::ClientIdentity, MpcHttpTransport};
 
 /// Construct router for IPA query web service
 ///
 /// In principle, this web service could be backed by either an HTTP-interconnected helper network or
 /// an in-memory helper network. These are the APIs used by external callers (report collectors) to
 /// examine attribution results.
-pub fn query_router(transport: Arc<MpcHttpTransport>) -> Router {
+pub fn query_router(transport: MpcHttpTransport) -> Router {
     Router::new()
-        .merge(create::router(Arc::clone(&transport)))
-        .merge(input::router(Arc::clone(&transport)))
-        .merge(status::router(Arc::clone(&transport)))
+        .merge(create::router(transport.clone()))
+        .merge(input::router(transport.clone()))
+        .merge(status::router(transport.clone()))
         .merge(results::router(transport))
 }
 
@@ -41,9 +38,9 @@ pub fn query_router(transport: Arc<MpcHttpTransport>) -> Router {
 /// particular query, to coordinate servicing that query.
 //
 // It might make sense to split the query and h2h handlers into two modules.
-pub fn h2h_router(transport: Arc<MpcHttpTransport>) -> Router {
+pub fn h2h_router(transport: MpcHttpTransport) -> Router {
     Router::new()
-        .merge(prepare::router(Arc::clone(&transport)))
+        .merge(prepare::router(transport.clone()))
         .merge(step::router(transport))
         .layer(layer_fn(HelperAuthentication::new))
 }

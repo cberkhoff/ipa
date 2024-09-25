@@ -9,24 +9,26 @@ use crate::{
         MpcHttpTransport,
     },
     protocol::QueryId,
-    sync::Arc,
 };
 
 /// Handles the completion of the query by blocking the sender until query is completed.
 async fn handler(
-    transport: Extension<Arc<MpcHttpTransport>>,
+    transport: Extension<MpcHttpTransport>,
     Path(query_id): Path<QueryId>,
 ) -> Result<Vec<u8>, Error> {
     let req = Request { query_id };
     // TODO: we may be able to stream the response
-    let transport = Transport::clone_ref(&*transport);
-    match transport.dispatch(req, BodyStream::empty()).await {
+    match transport
+        .clone_ref()
+        .dispatch(req, BodyStream::empty())
+        .await
+    {
         Ok(resp) => Ok(resp.into_body()),
         Err(e) => Err(Error::application(StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
 }
 
-pub fn router(transport: Arc<MpcHttpTransport>) -> Router {
+pub fn router(transport: MpcHttpTransport) -> Router {
     Router::new()
         .route(http_serde::query::results::AXUM_PATH, get(handler))
         .layer(Extension(transport))

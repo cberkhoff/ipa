@@ -78,14 +78,14 @@ impl TracingSpanMaker for () {
 ///
 /// `MpcHelperServer` handles requests from both peer helpers and external clients.
 pub struct MpcHelperServer {
-    transport: Arc<MpcHttpTransport>,
+    transport: MpcHttpTransport,
     config: ServerConfig,
     network_config: RingConfig,
 }
 
 impl MpcHelperServer {
     pub fn new(
-        transport: Arc<MpcHttpTransport>,
+        transport: MpcHttpTransport,
         config: ServerConfig,
         network_config: RingConfig,
     ) -> Self {
@@ -97,7 +97,7 @@ impl MpcHelperServer {
     }
 
     fn router(&self) -> Router {
-        handlers::router(Arc::clone(&self.transport))
+        handlers::router(self.transport.clone())
     }
 
     #[cfg(all(test, unit_test))]
