@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::BufReader,
     net::TcpListener,
@@ -14,10 +15,10 @@ use ipa_core::{
     cli::{
         client_config_setup, keygen, test_setup, ConfGenArgs, KeygenArgs, TestSetupArgs, Verbosity,
     },
-    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, ShardsConfig, TlsConfig},
+    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
-    net::{ClientIdentity, ShardHttpTransport, MpcHelperClient, MpcHttpTransport},
+    net::{ClientIdentity, MpcHelperClient, MpcHttpTransport, ShardHttpTransport},
     sharding::ShardIndex,
     AppConfig, AppSetup,
 };
@@ -161,7 +162,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
         my_identity,
         server_config.clone(),
         network_config.clone(),
-        &clients,
+        clients,
         Some(handler),
     );
 
@@ -170,7 +171,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
         client: network_config.client,
     };*/
 
-    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), vec![], None);
+    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), HashMap::new(), None);
 
     let _app = setup.connect(transport.clone(), shard_transport);
 

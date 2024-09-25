@@ -202,7 +202,7 @@ impl TestConfigBuilder {
 pub struct TestServer {
     pub addr: SocketAddr,
     pub handle: JoinHandle<()>,
-    pub transport: Arc<MpcHttpTransport>,
+    pub transport: MpcHttpTransport,
     pub server: MpcHelperServer,
     pub client: MpcHelperClient,
     pub request_handler: Option<Arc<dyn RequestHandler<Identity = HelperIdentity>>>,
@@ -297,7 +297,7 @@ impl TestServerBuilder {
             HelperIdentity::ONE,
             server_config,
             network_config.clone(),
-            &clients,
+            clients,
             handler,
         );
         let (addr, handle) = server.start_on(Some(server_socket), self.metrics).await;
