@@ -39,7 +39,7 @@ pub struct MpcHttpTransport {
 }
 
 /// A stub for HTTP transport implementation, suitable for serving inter-shard traffic
-pub struct HttpShardTransport {
+pub struct ShardHttpTransport {
     #[allow(dead_code)]
     inner_transport: HttpTransport<ShardIndex>,
 }
@@ -300,7 +300,7 @@ impl Transport for Arc<MpcHttpTransport> {
     }
 }
 
-impl HttpShardTransport {
+impl ShardHttpTransport {
     #[must_use]
     pub fn new(
         identity: ShardIndex,
@@ -329,7 +329,7 @@ impl HttpShardTransport {
 }
 
 #[async_trait]
-impl Transport for Arc<HttpShardTransport> {
+impl Transport for Arc<ShardHttpTransport> {
     type Identity = ShardIndex;
     type RecordsStream = ReceiveRecords<ShardIndex, BodyStream>;
     type Error = ();
@@ -467,7 +467,7 @@ mod tests {
                         client: nc.client,
                     };*/
 
-                    let shard_transport = HttpShardTransport::new(ShardIndex(0u32), vec![], None);
+                    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), vec![], None);
 
                     setup.connect(transport, shard_transport)
                 },

@@ -17,7 +17,7 @@ use ipa_core::{
     config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, ShardsConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
-    net::{ClientIdentity, HttpShardTransport, MpcHelperClient, MpcHttpTransport},
+    net::{ClientIdentity, ShardHttpTransport, MpcHelperClient, MpcHttpTransport},
     sharding::ShardIndex,
     AppConfig, AppSetup,
 };
@@ -170,7 +170,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
         client: network_config.client,
     };*/
 
-    let shard_transport = HttpShardTransport::new(ShardIndex(0u32), vec![], None);
+    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), vec![], None);
 
     let _app = setup.connect(transport.clone(), shard_transport);
 
