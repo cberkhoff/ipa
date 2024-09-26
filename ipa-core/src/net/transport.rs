@@ -324,17 +324,17 @@ impl ShardHttpTransport {
 impl Transport for ShardHttpTransport {
     type Identity = ShardIndex;
     type RecordsStream = ReceiveRecords<ShardIndex, BodyStream>;
-    type Error = ();
+    type Error = Error;
 
     fn identity(&self) -> Self::Identity {
-        unimplemented!()
+        self.inner_transport.identity
     }
 
     async fn send<D, Q, S, R>(
         &self,
-        _dest: Self::Identity,
-        _route: R,
-        _data: D,
+        dest: Self::Identity,
+        route: R,
+        data: D,
     ) -> Result<(), Self::Error>
     where
         Option<QueryId>: From<Q>,
@@ -344,15 +344,15 @@ impl Transport for ShardHttpTransport {
         R: RouteParams<RouteId, Q, S>,
         D: Stream<Item = Vec<u8>> + Send + 'static,
     {
-        unimplemented!()
+        self.inner_transport.send(dest, route, data).await
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
         &self,
-        _from: Self::Identity,
-        _route: R,
+        from: Self::Identity,
+        route: R,
     ) -> Self::RecordsStream {
-        unimplemented!()
+        self.inner_transport.receive(from, &route)
     }
 }
 
@@ -484,11 +484,6 @@ mod tests {
                         Some(handler),
                     );
                     server.start_on(Some(socket), ()).await;
-
-                    /*let shards_config = ShardsConfig {
-                        peers: vec![],
-                        client: nc.client,
-                    };*/
 
                     let shard_transport =
                         ShardHttpTransport::new(ShardIndex(0u32), HashMap::new(), None);
