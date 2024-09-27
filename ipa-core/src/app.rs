@@ -12,6 +12,7 @@ use crate::{
     hpke::{KeyRegistry, PrivateKeyOnly},
     protocol::QueryId,
     query::{NewQueryError, QueryProcessor, QueryStatus},
+    sharding::ShardIndex,
     sync::Arc,
 };
 
@@ -37,7 +38,8 @@ impl AppConfig {
 
 pub struct Setup {
     query_processor: QueryProcessor,
-    handler: HandlerRef,
+    mpc_handler: HandlerRef<HelperIdentity>,
+    shard_handler: HandlerRef<ShardIndex>,
 }
 
 /// The API layer to interact with a helper.
@@ -58,21 +60,25 @@ struct Inner {
 
 impl Setup {
     #[must_use]
-    pub fn new(config: AppConfig) -> (Self, HandlerRef) {
+    pub fn new(config: AppConfig) -> (Self, HandlerRef<HelperIdentity>, HandlerRef<ShardIndex>) {
         let key_registry = config.key_registry.unwrap_or_else(KeyRegistry::empty);
         let query_processor = QueryProcessor::new(key_registry, config.active_work);
-        let handler = HandlerBox::empty();
+        let mpc_handler = HandlerBox::empty();
+        let shard_handler = HandlerBox::empty();
         let this = Self {
             query_processor,
-            handler: handler.clone(),
+            mpc_handler: mpc_handler.clone(),
+            shard_handler: shard_handler.clone(),
         };
 
         // TODO: weak reference to query processor to prevent mem leak
-        (this, handler)
+        (this, mpc_handler, shard_handler)
     }
 
     #[must_use]
-    pub fn with_key_registry(key_registry: KeyRegistry<PrivateKeyOnly>) -> (Self, HandlerRef) {
+    pub fn with_key_registry(
+        key_registry: KeyRegistry<PrivateKeyOnly>,
+    ) -> (Self, HandlerRef<HelperIdentity>, HandlerRef<ShardIndex>) {
         Self::new(AppConfig::default().with_key_registry(key_registry))
     }
 
@@ -87,9 +93,8 @@ impl Setup {
             mpc_transport,
             shard_transport,
         });
-        self.handler.set_handler(
-            Arc::downgrade(&app) as Weak<dyn RequestHandler<Identity = HelperIdentity>>
-        );
+        self.mpc_handler
+            .set_handler(Arc::downgrade(&app) as Weak<dyn RequestHandler<HelperIdentity>>);
 
         // Handler must be kept inside the app instance. When app is dropped, handler, transport and
         // query processor are destroyed.
@@ -107,10 +112,7 @@ impl HelperApp {
         Ok(self
             .inner
             .query_processor
-            .new_query(
-                Transport::clone_ref(&self.inner.mpc_transport),
-                query_config,
-            )
+            .new_query(self.inner.mpc_transport.clone(), query_config)
             .await?
             .query_id)
     }
@@ -120,8 +122,8 @@ impl HelperApp {
     /// ## Errors
     /// Propagates errors from the helper.
     pub fn execute_query(&self, input: QueryInput) -> Result<(), ApiError> {
-        let mpc_transport = Transport::clone_ref(&self.inner.mpc_transport);
-        let shard_transport = Transport::clone_ref(&self.inner.shard_transport);
+        let mpc_transport = self.inner.mpc_transport.clone();
+        let shard_transport = self.inner.shard_transport.clone();
         self.inner
             .query_processor
             .receive_inputs(mpc_transport, shard_transport, input)?;
@@ -151,12 +153,10 @@ impl HelperApp {
 }
 
 #[async_trait]
-impl RequestHandler for Inner {
-    type Identity = HelperIdentity;
-
+impl RequestHandler<HelperIdentity> for Inner {
     async fn handle(
         &self,
-        req: Addr<Self::Identity>,
+        req: Addr<HelperIdentity>,
         data: BodyStream,
     ) -> Result<HelperResponse, ApiError> {
         fn ext_query_id(req: &Addr<HelperIdentity>) -> Result<QueryId, ApiError> {

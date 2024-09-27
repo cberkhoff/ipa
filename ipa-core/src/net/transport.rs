@@ -11,7 +11,7 @@ use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
 use crate::{
-    config::{RingConfig, ServerConfig},
+    config::{RingConfig, ServerConfig, ShardsConfig},
     helpers::{
         query::QueryConfig,
         routing::{Addr, RouteId},
@@ -194,7 +194,7 @@ impl MpcHttpTransport {
         server_config: ServerConfig,
         network_config: RingConfig,
         clients: [MpcHelperClient; 3],
-        handler: Option<HandlerRef>,
+        handler: Option<HandlerRef<HelperIdentity>>,
     ) -> (Self, MpcHelperServer) {
         let transport = Self::new_internal(identity, clients, handler);
         let server = MpcHelperServer::new(transport.clone(), server_config, network_config);
@@ -204,7 +204,7 @@ impl MpcHttpTransport {
     fn new_internal(
         identity: HelperIdentity,
         clients: [MpcHelperClient; 3],
-        handler: Option<HandlerRef>,
+        handler: Option<HandlerRef<HelperIdentity>>,
     ) -> Self {
         let mut id_clients = HashMap::new();
         let [c1, c2, c3] = clients;
@@ -296,8 +296,8 @@ impl ShardHttpTransport {
     #[must_use]
     pub fn new(
         identity: ShardIndex,
-        //server_config: ServerConfig,
-        //network_config: ShardsConfig,
+        server_config: ServerConfig,
+        network_config: ShardsConfig,
         clients: HashMap<ShardIndex, MpcHelperClient>,
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> Self {
