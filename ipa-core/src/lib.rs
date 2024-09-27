@@ -101,6 +101,17 @@ pub(crate) mod task {
 pub(crate) mod test_executor {
     use std::future::Future;
 
+    fn check_random<F>(f: F, iterations: usize)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let mut config = shuttle_crate::Config::default();
+        config.stack_size = 0xf000;
+        let scheduler = shuttle_crate::scheduler::RandomScheduler::new(iterations);
+        let runner = shuttle_crate::Runner::new(scheduler, config);
+        runner.run(f);
+    }
+
     pub fn run<F, Fut>(f: F)
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -114,7 +125,7 @@ pub(crate) mod test_executor {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()>,
     {
-        shuttle::check_random(move || shuttle::future::block_on(f()), ITER);
+        check_random(move || shuttle::future::block_on(f()), ITER);
     }
 }
 
