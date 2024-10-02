@@ -15,7 +15,7 @@ use ipa_core::{
     cli::{
         client_config_setup, keygen, test_setup, ConfGenArgs, KeygenArgs, TestSetupArgs, Verbosity,
     },
-    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, TlsConfig},
+    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, ShardsConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{ClientIdentity, MpcHelperClient, MpcHttpTransport, ShardHttpTransport},
@@ -54,36 +54,69 @@ struct ServerArgs {
     #[arg(short, long, required = true)]
     identity: Option<usize>,
 
-    /// Port to listen on
-    #[arg(short, long, default_value = "3000")]
-    port: Option<u16>,
+    /// Index of this shard within a helper.
+    #[arg(long, default_value = "0", requires = "total_shards")]
+    index: u32,
+
+    /// Index of this shard within a helper.
+    #[arg(long, default_value = "1", requires = "index")]
+    total_shards: u32,
+
+    /// Port to listen on for helper-to-helper communication.
+    #[arg(short, long, visible_alias("port"), default_value = "3000")]
+    ring_port: Option<u16>,
+
+    /// Port to listen for shard communication
+    #[arg(short, long, default_value = "6000")]
+    shard_port: Option<u16>,
 
     /// Use the supplied prebound socket instead of binding a new socket
     ///
     /// This is only intended for avoiding port conflicts in tests.
+    #[arg(hide = true, visible_alias("server_socket_fd"), long)]
+    ring_server_socket_fd: Option<RawFd>,
+
+    /// Use the supplied prebound socket instead of binding a new socket for inter shard communication.
+    ///
+    /// This is only intended for avoiding port conflicts in tests.
     #[arg(hide = true, long)]
-    server_socket_fd: Option<RawFd>,
+    shard_server_socket_fd: Option<RawFd>,
 
     /// Use insecure HTTP
     #[arg(short = 'k', long)]
     disable_https: bool,
 
-    /// File containing helper network configuration
+    /// File containing the ring network configuration
+    #[arg(long, visible_alias("network"), required = true)]
+    ring_network: Option<PathBuf>,
+
     #[arg(long, required = true)]
-    network: Option<PathBuf>,
+    shard_network: Option<PathBuf>,
 
     /// TLS certificate for helper-to-helper communication
     #[arg(
         long,
         visible_alias("cert"),
         visible_alias("tls-certificate"),
+        visible_alias("tls-cert"),
         requires = "tls_key"
     )]
-    tls_cert: Option<PathBuf>,
+    ring_tls_cert: Option<PathBuf>,
 
     /// TLS key for helper-to-helper communication
-    #[arg(long, visible_alias("key"), requires = "tls_cert")]
-    tls_key: Option<PathBuf>,
+    #[arg(long, visible_alias("key"), visible_alias("tls_key"), requires = "ring_tls_cert")]
+    ring_tls_key: Option<PathBuf>,
+
+    /// TLS certificate for intra-helper communication
+    #[arg(
+        long,
+        requires = "shard_tls_key"
+    )]
+    shard_tls_cert: Option<PathBuf>,
+
+    /// TLS key for intra-helper communication
+    #[arg(long, visible_alias("key"), visible_alias("tls_key"), requires = "shard_tls_cert")]
+    shard_tls_key: Option<PathBuf>,
 
     /// Public key for encrypting match keys
     #[arg(long, requires = "mk_private_key")]
@@ -114,21 +147,38 @@ fn read_file(path: &Path) -> Result<BufReader<fs::File>, BoxError> {
 }
 
 async fn server(args: ServerArgs) -> Result<(), BoxError> {
-    let my_identity = HelperIdentity::try_from(args.identity.expect("enforced by clap")).unwrap();
+    let mpc_identity = HelperIdentity::try_from(args.identity.expect("enforced by clap")).unwrap();
+    let shard_index = ShardIndex(args.index);
 
-    let (identity, server_tls) = match (args.tls_cert, args.tls_key) {
-        (Some(cert_file), Some(key_file)) => {
-            let mut key = read_file(&key_file)?;
-            let mut certs = read_file(&cert_file)?;
+    let (mpc_identity, mpc_server_tls) = match (args.ring_tls_cert, args.ring_tls_key) {
+        (Some(ring_cert_file), Some(ring_key_file)) => {
+            let mut key = read_file(&ring_key_file)?;
+            let mut certs = read_file(&ring_cert_file)?;
             (
                 ClientIdentity::from_pkcs8(&mut certs, &mut key)?,
                 Some(TlsConfig::File {
-                    certificate_file: cert_file,
-                    private_key_file: key_file,
+                    certificate_file: ring_cert_file,
+                    private_key_file: ring_key_file,
                 }),
             )
         }
-        (None, None) => (ClientIdentity::Helper(my_identity), None),
+        (None, None) => (ClientIdentity::Helper(mpc_identity), None),
+        _ => panic!("should have been rejected by clap"),
+    };
+
+    let (shard_identity, shard_server_tls) = match (args.shard_tls_cert, args.shard_tls_key) {
+        (Some(shard_cert_file), Some(shard_key_file)) => {
+            let mut key = read_file(&shard_key_file)?;
+            let mut certs = read_file(&shard_cert_file)?;
+            (
+                ClientIdentity::from_pkcs8(&mut certs, &mut key)?,
+                Some(TlsConfig::File {
+                    certificate_file: shard_cert_file,
+                    private_key_file: shard_key_file,
+                }),
+            )
+        }
+        (None, None) => (ClientIdentity::Shard(shard_index), None),
         _ => panic!("should have been rejected by clap"),
     };
 
@@ -139,12 +189,19 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
     let app_config = AppConfig::default()
         .with_key_registry(hpke_registry(mk_encryption.as_ref()).await?)
         .with_active_work(args.active_work);
-    let (setup, handler) = AppSetup::new(app_config);
+    let (setup, mpc_handler, shard_handler) = AppSetup::new(app_config);
 
-    let server_config = ServerConfig {
-        port: args.port,
+    let mpc_server_config = ServerConfig {
+        port: args.ring_port,
         disable_https: args.disable_https,
-        tls: server_tls,
+        tls: mpc_server_tls,
+        hpke_config: mk_encryption,
+    };
+
+    let shard_server_config = ServerConfig {
+        port: args.shard_port,
+        disable_https: args.disable_https,
+        tls: shard_server_tls,
         hpke_config: mk_encryption,
     };
 
@@ -153,29 +210,29 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
     } else {
         Scheme::HTTPS
     };
-    let network_config_path = args.network.as_deref().unwrap();
+    let network_config_path = args.ring_network.as_deref().unwrap();
     let network_config = RingConfig::from_toml_str(&fs::read_to_string(network_config_path)?)?
         .override_scheme(&scheme);
-    let clients = MpcHelperClient::from_conf(&network_config, &identity);
+    let clients = MpcHelperClient::from_conf(&network_config, &mpc_identity);
 
     let (transport, server) = MpcHttpTransport::new(
-        my_identity,
-        server_config.clone(),
+        mpc_identity,
+        mpc_server_config.clone(),
         network_config.clone(),
         clients,
-        Some(handler),
+        Some(mpc_handler),
     );
 
-    /*let shards_config = ShardsConfig {
+    let shards_config = ShardsConfig {
         peers: vec![],
         client: network_config.client,
-    };*/
+    };
 
-    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), HashMap::new(), None);
+    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), shard_server_config,shards_config, HashMap::new(), None);
 
     let _app = setup.connect(transport.clone(), shard_transport);
 
-    let listener = args.server_socket_fd
+    let listener = args.ring_server_socket_fd
         .map(|fd| {
             // SAFETY:
             //  1. The `--server-socket-fd` option is only intended for use in tests, not in production.

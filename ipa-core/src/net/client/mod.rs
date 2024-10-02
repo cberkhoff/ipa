@@ -1,10 +1,5 @@
 use std::{
-    collections::HashMap,
-    future::Future,
-    io::{self, BufRead},
-    pin::Pin,
-    sync::Arc,
-    task::{ready, Context, Poll},
+    collections::HashMap, future::Future, io::{self, BufRead}, marker::PhantomData, pin::Pin, sync::Arc, task::{ready, Context, Poll}
 };
 
 use axum::{
@@ -26,16 +21,17 @@ use tracing::error;
 
 use crate::{
     config::{
-        ClientConfig, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig,
-        RingConfig,
+        ClientConfig, ClientTarget, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig, RingConfig
     },
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
         HelperIdentity,
     },
     net::{http_serde, server::HTTP_CLIENT_ID_HEADER, Error, CRYPTO_PROVIDER},
-    protocol::{Gate, QueryId},
+    protocol::{Gate, QueryId}, sharding::ShardIndex,
 };
+
+use super::server::HTTP_SHARD_INDEX_HEADER;
 
 #[derive(Default)]
 pub enum ClientIdentity {
@@ -43,6 +39,11 @@ pub enum ClientIdentity {
     ///
     /// This is only supported for HTTP clients.
     Helper(HelperIdentity),
+
+    /// Claim the specified shard identity without any additional authentication.
+    ///
+    /// This is only supported for HTTP clients.
+    Shard(ShardIndex),
 
     /// Authenticate with an X.509 certificate or a certificate chain.
     ///
@@ -83,6 +84,7 @@ impl ClientIdentity {
         match self {
             Self::Certificate((c, pk)) => Self::Certificate((c.clone(), pk.clone_key())),
             Self::Helper(h) => Self::Helper(*h),
+            Self::Shard(h) => Self::Shard(*h),
             Self::None => Self::None,
         }
     }
@@ -150,14 +152,15 @@ impl<'a> Future for ResponseFuture<'a> {
 /// TODO: It probably isn't necessary to always use `[MpcHelperClient; 3]`. Instead, a single
 ///       client can be configured to talk to all three helpers.
 #[derive(Debug, Clone)]
-pub struct MpcHelperClient {
+pub struct MpcHelperClient<T: ClientTarget> {
     client: Client<HttpsConnector<HttpConnector>, Body>,
     scheme: uri::Scheme,
     authority: uri::Authority,
     auth_header: Option<(HeaderName, HeaderValue)>,
+    target: PhantomData<T>
 }
 
-impl MpcHelperClient {
+impl<T: ClientTarget> MpcHelperClient<T> {
     /// Create a set of clients for the MPC helpers in the supplied helper network configuration.
     ///
     /// This function returns a set of three clients, which may be used to talk to each of the
@@ -168,7 +171,7 @@ impl MpcHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &RingConfig, identity: &ClientIdentity) -> [MpcHelperClient; 3] {
+    pub fn from_conf(conf: &RingConfig, identity: &ClientIdentity) -> [Self; 3] {
         conf.peers()
             .each_ref()
             .map(|peer_conf| Self::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))
@@ -196,6 +199,7 @@ impl MpcHelperClient {
                     None
                 }
                 ClientIdentity::Helper(id) => Some((HTTP_CLIENT_ID_HEADER.clone(), id.into())),
+                ClientIdentity::Shard(id) => Some((HTTP_SHARD_INDEX_HEADER.clone(), id)),
                 ClientIdentity::None => None,
             };
             (
@@ -334,7 +338,9 @@ impl MpcHelperClient {
             Err(Error::from_failed_resp(resp).await)
         }
     }
+}
 
+impl MpcHelperClient<Ring> {
     /// Intended to be called externally, by the report collector. Informs the MPC ring that
     /// the external party wants to start a new query.
     /// # Errors
@@ -513,7 +519,7 @@ pub(crate) mod tests {
         ClientOut: Eq + Debug,
         ClientFut: Future<Output = ClientOut>,
         ClientF: Fn(MpcHelperClient) -> ClientFut,
-        HandlerF: Fn() -> Arc<dyn RequestHandler<Identity = HelperIdentity>>,
+        HandlerF: Fn() -> Arc<dyn RequestHandler<HelperIdentity>>,
     {
         let mut results = Vec::with_capacity(4);
         for (use_https, use_http1) in zip([true, false], [true, false]) {

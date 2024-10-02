@@ -63,6 +63,10 @@ pub struct ShardsConfig {
     pub client: ClientConfig,
 }
 
+pub trait ClientTarget {}
+impl ClientTarget for RingConfig {}
+impl ClientTarget for ShardsConfig {}
+
 impl RingConfig {
     /// Reads config from string. Expects config to be toml format.
     /// To read file, use `fs::read_to_string`

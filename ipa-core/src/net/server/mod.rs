@@ -429,6 +429,10 @@ impl<B, S: Service<Request<B>>> Service<Request<B>> for SetClientIdentityFromCer
 pub static HTTP_CLIENT_ID_HEADER: HeaderName =
     HeaderName::from_static("x-unverified-client-identity");
 
+/// Name of the header that passes the shard index when not using HTTPS.
+pub static HTTP_SHARD_INDEX_HEADER: HeaderName =
+    HeaderName::from_static("x-unverified-shard-index");
+
 /// Service wrapper that gets a client helper identity from a header.
 ///
 /// Since this allows a client to claim any identity, it is completely

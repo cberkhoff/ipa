@@ -462,7 +462,8 @@ mod tests {
     async fn make_helpers(
         sockets: [TcpListener; 3],
         server_config: [ServerConfig; 3],
-        network_config: &RingConfig,
+        ring_config: &RingConfig,
+        shards_config: &ShardsConfig,
         disable_https: bool,
     ) -> [HelperApp; 3] {
         join_all(
@@ -473,15 +474,15 @@ mod tests {
                     } else {
                         get_test_identity(id)
                     };
-                    let nc = network_config.clone();
-                    let (setup, handler) = AppSetup::new(AppConfig::default());
-                    let clients = MpcHelperClient::from_conf(network_config, &identity);
+                    let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
+                    let clients = MpcHelperClient::from_conf(ring_config, &identity);
+                    let clients = MpcHelperClient::from_conf(ring_config, &identity);
                     let (transport, server) = MpcHttpTransport::new(
                         id,
                         server_config.clone(),
-                        nc.clone(),
+                        ring_config.clone(),
                         clients,
-                        Some(handler),
+                        Some(mpc_handler),
                     );
                     server.start_on(Some(socket), ()).await;
 

@@ -95,7 +95,8 @@ impl Setup {
         });
         self.mpc_handler
             .set_handler(Arc::downgrade(&app) as Weak<dyn RequestHandler<HelperIdentity>>);
-
+        self.shard_handler
+            .set_handler(Arc::downgrade(&app) as Weak<dyn RequestHandler<ShardIndex>>);
         // Handler must be kept inside the app instance. When app is dropped, handler, transport and
         // query processor are destroyed.
         HelperApp { inner: app }
@@ -149,6 +150,45 @@ impl HelperApp {
             .complete(query_id)
             .await?
             .to_bytes())
+    }
+}
+
+#[async_trait]
+impl RequestHandler<ShardIndex> for Inner {
+
+    async fn handle(
+        &self,
+        req: Addr<ShardIndex>,
+        _data: BodyStream,
+    ) -> Result<HelperResponse, ApiError> {
+        fn ext_query_id(req: &Addr<ShardIndex>) -> Result<QueryId, ApiError> {
+            req.query_id.ok_or_else(|| {
+                ApiError::BadRequest("Query input is missing query_id argument".into())
+            })
+        }
+
+        let qp = &self.query_processor;
+
+        Ok(match req.route {
+            RouteId::QueryStatus => {
+                let query_id = ext_query_id(&req)?;
+                HelperResponse::from(qp.query_status(query_id)?)
+            }
+            RouteId::CompleteQuery => {
+                let query_id = ext_query_id(&req)?;
+                HelperResponse::from(qp.complete(query_id).await?)
+            }
+            RouteId::PrepareQuery => {
+                todo!()
+                // let req = req.into::<PrepareQuery>()?;
+                // HelperResponse::from(qp.prepare(&self.shard_transport, req)?)
+            }
+            r @ _ => {
+                return Err(ApiError::BadRequest(
+                    format!("{r:?} request must not be handled by query processing flow").into(),
+                ))
+            }
+        })
     }
 }
 
