@@ -25,6 +25,8 @@ use crate::{
     sync::Arc,
 };
 
+use super::client::HelperClient;
+
 /// Shared implementation used by [`MpcHttpTransport`] and [`ShardHttpTransport`]
 pub struct HttpTransport<I: TransportIdentity> {
     identity: I,
@@ -95,7 +97,7 @@ impl<I: TransportIdentity> HttpTransport<I> {
                 // so this can just poll this future.
                 resp_future
                     .map_err(Into::into)
-                    .and_then(MpcHelperClient::resp_ok)
+                    .and_then(HelperClient::resp_ok)
                     .await?;
                 Ok(())
             }
@@ -378,7 +380,7 @@ mod tests {
             query::{QueryInput, QueryType::TestMultiply},
         },
         net::{
-            client::ClientIdentity,
+            client::{ClientIdentity, ShardHelperClient},
             test::{get_test_identity, TestConfig, TestConfigBuilder, TestServer},
         },
         secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares},
@@ -400,18 +402,18 @@ mod tests {
             .build()
             .await;
 
-        transport.record_streams.add_stream(
+        transport.inner_transport.record_streams.add_stream(
             (QueryId, HelperIdentity::ONE, Gate::default()),
             BodyStream::empty(),
         );
-        assert_eq!(1, transport.record_streams.len());
+        assert_eq!(1, transport.inner_transport.record_streams.len());
 
         Transport::clone_ref(&transport)
             .dispatch((RouteId::KillQuery, QueryId), BodyStream::empty())
             .await
             .unwrap();
 
-        assert!(transport.record_streams.is_empty());
+        assert!(transport.inner_transport.record_streams.is_empty());
     }
 
     #[tokio::test]
@@ -464,6 +466,7 @@ mod tests {
         server_config: [ServerConfig; 3],
         ring_config: &RingConfig,
         shards_config: &ShardsConfig,
+        shards_server_config: Vec<ServerConfig>,
         disable_https: bool,
     ) -> [HelperApp; 3] {
         join_all(
@@ -476,18 +479,23 @@ mod tests {
                     };
                     let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
                     let clients = MpcHelperClient::from_conf(ring_config, &identity);
-                    let clients = MpcHelperClient::from_conf(ring_config, &identity);
                     let (transport, server) = MpcHttpTransport::new(
                         id,
                         server_config.clone(),
-                        ring_config.clone(),
+                        ring_config,
                         clients,
                         Some(mpc_handler),
                     );
                     server.start_on(Some(socket), ()).await;
 
+                    let shard_clients = ShardHelperClient::from_conf(shards_config, &identity);
                     let shard_transport =
-                        ShardHttpTransport::new(ShardIndex(0u32), HashMap::new(), None);
+                        ShardHttpTransport::new(
+                            ShardIndex(0u32),
+                            shards_server_config,
+                            shards_config,
+                            shard_clients,
+                            Some(shard_handler));
 
                     setup.connect(transport, shard_transport)
                 },

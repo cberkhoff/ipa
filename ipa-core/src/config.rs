@@ -63,9 +63,11 @@ pub struct ShardsConfig {
     pub client: ClientConfig,
 }
 
-pub trait ClientTarget {}
-impl ClientTarget for RingConfig {}
-impl ClientTarget for ShardsConfig {}
+impl ShardsConfig {
+    pub fn peers(&self) -> &Vec<PeerConfig> {
+        &self.peers
+    }
+}
 
 impl RingConfig {
     /// Reads config from string. Expects config to be toml format.

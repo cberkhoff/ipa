@@ -3,8 +3,11 @@ use std::{
     num::TryFromIntError,
 };
 
+use serde::{Deserialize, Serialize};
+
 /// A unique zero-based index of the helper shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(from = "u32")]
 pub struct ShardIndex(pub u32);
 
 #[derive(Debug, Copy, Clone)]
@@ -26,6 +29,20 @@ impl ShardConfiguration for Sharded {
 impl Display for ShardIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.0, f)
+    }
+}
+
+#[cfg(feature = "web-app")]
+impl From<ShardIndex> for hyper::header::HeaderValue {
+    fn from(ix: ShardIndex) -> Self {
+        // panic if serializing an integer fails, or is not ASCII
+        hyper::header::HeaderValue::try_from(serde_json::to_string(&ix).unwrap()).unwrap()
+    }
+}
+
+impl From<ShardIndex> for u32 {
+    fn from(value: ShardIndex) -> Self {
+        value.0
     }
 }
 
