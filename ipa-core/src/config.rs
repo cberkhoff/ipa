@@ -1,11 +1,5 @@
 use std::{
-    array,
-    borrow::{Borrow, Cow},
-    fmt::{Debug, Formatter},
-    iter::Zip,
-    path::PathBuf,
-    slice,
-    time::Duration,
+    array, borrow::{Borrow, Cow}, collections::HashMap, fmt::{Debug, Formatter}, iter::Zip, path::PathBuf, slice, time::Duration
 };
 
 use hyper::{http::uri::Scheme, Uri};
@@ -21,7 +15,7 @@ use crate::{
     hpke::{
         Deserializable as _, IpaPrivateKey, IpaPublicKey, KeyRegistry, PrivateKeyOnly,
         PublicKeyOnly, Serializable as _,
-    },
+    }, sharding::ShardIndex,
 };
 
 pub type OwnedCertificate = CertificateDer<'static>;
@@ -35,6 +29,10 @@ pub enum Error {
     InvalidUri(#[from] hyper::http::uri::InvalidUri),
     #[error(transparent)]
     IOError(#[from] std::io::Error),
+}
+
+pub trait NetworkConfig {
+    fn certificates() -> Vec<OwnedCertificate>;
 }
 
 /// Configuration describing 3 peers. In the sharded world this would be a ring, in the non-sharded
@@ -64,8 +62,12 @@ pub struct ShardsConfig {
 }
 
 impl ShardsConfig {
-    pub fn peers(&self) -> &Vec<PeerConfig> {
-        &self.peers
+    pub fn enumerate_peers(&self) -> HashMap<ShardIndex, &PeerConfig> {
+        let mut indexed_peers = HashMap::new();
+        for (i, p) in self.peers.iter().enumerate() {
+            indexed_peers.insert(ShardIndex(i.try_into().unwrap()), p);
+        }
+        indexed_peers
     }
 }
 

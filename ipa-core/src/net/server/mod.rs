@@ -42,16 +42,10 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{OwnedCertificate, OwnedPrivateKey, RingConfig, ServerConfig, TlsConfig},
-    error::BoxError,
-    helpers::HelperIdentity,
-    net::{
+    config::{OwnedCertificate, OwnedPrivateKey, RingConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::{HelperIdentity, TransportIdentity}, net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
         MpcHttpTransport, CRYPTO_PROVIDER,
-    },
-    sync::Arc,
-    task::JoinHandle,
-    telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED},
+    }, sharding::TransportRestriction, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
 };
 
 pub trait TracingSpanMaker: Send + Sync + Clone + 'static {
@@ -77,27 +71,23 @@ impl TracingSpanMaker for () {
 /// IPA helper web service
 ///
 /// `MpcHelperServer` handles requests from both peer helpers and external clients.
-pub struct MpcHelperServer {
-    transport: MpcHttpTransport,
+pub struct MpcHelperServer<T: TransportRestriction> {
     config: ServerConfig,
-    network_config: RingConfig,
+    network_config: NC,
+    router: Router,
 }
 
-impl MpcHelperServer {
+impl<NC> MpcHelperServer<NC> {
     pub fn new(
         transport: MpcHttpTransport,
         config: ServerConfig,
         network_config: RingConfig,
     ) -> Self {
         MpcHelperServer {
-            transport,
             config,
             network_config,
+            router: handlers::router(transport.clone())
         }
-    }
-
-    fn router(&self) -> Router {
-        handlers::router(self.transport.clone())
     }
 
     #[cfg(all(test, unit_test))]
@@ -132,7 +122,7 @@ impl MpcHelperServer {
         #[cfg(not(test))]
         const BIND_ADDRESS: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
 
-        let svc = self.router().layer(
+        let svc = self.router.clone().layer(
             TraceLayer::new_for_http()
                 .make_span_with(move |_request: &hyper::Request<_>| tracing.make_span())
                 .on_request(|request: &hyper::Request<_>, _: &Span| {
@@ -273,7 +263,7 @@ async fn certificate_and_key(
 /// If there is a problem with the TLS configuration.
 async fn rustls_config(
     config: &ServerConfig,
-    network: &RingConfig,
+    certs: Vec<&OwnedCertificate>,
 ) -> Result<RustlsConfig, BoxError> {
     let (cert, key) = certificate_and_key(config).await?;
 
@@ -313,10 +303,10 @@ async fn rustls_config(
 // to avoid possible confusion about how many times the return from `req.extensions().get()` must be
 // unwrapped to ensure valid authentication.
 #[derive(Clone, Copy, Debug)]
-struct ClientIdentity(pub HelperIdentity);
+struct ClientIdentity<I: TransportIdentity>(pub I);
 
-impl Deref for ClientIdentity {
-    type Target = HelperIdentity;
+impl<I: TransportIdentity> Deref for ClientIdentity<I> {
+    type Target = I;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -361,10 +351,11 @@ impl ClientCertRecognizingAcceptor {
     }
 }
 
-impl<I, S> Accept<I, S> for ClientCertRecognizingAcceptor
+impl<I, S, NC> Accept<I, S> for ClientCertRecognizingAcceptor<NC>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: Send + 'static,
+    NC: NetworkConfig,
 {
     type Stream = TlsStream<I>;
     type Service = SetClientIdentityFromCertificate<S>;

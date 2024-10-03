@@ -5,6 +5,13 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+
+pub trait TransportRestriction {}
+pub struct IntraHelper;
+pub struct HelpersRing;
+impl TransportRestriction for IntraHelper {}
+impl TransportRestriction for HelpersRing {}
+
 /// A unique zero-based index of the helper shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[serde(from = "u32")]

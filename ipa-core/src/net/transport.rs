@@ -25,12 +25,12 @@ use crate::{
     sync::Arc,
 };
 
-use super::client::HelperClient;
+use super::client::{HelperClient, ShardHelperClient};
 
 /// Shared implementation used by [`MpcHttpTransport`] and [`ShardHttpTransport`]
 pub struct HttpTransport<I: TransportIdentity> {
     identity: I,
-    clients: HashMap<I, MpcHelperClient>,
+    clients: HashMap<I, HelperClient>,
     record_streams: StreamCollection<I, BodyStream>,
     handler: Option<HandlerRef<I>>,
 }
@@ -210,9 +210,9 @@ impl MpcHttpTransport {
     ) -> Self {
         let mut id_clients = HashMap::new();
         let [c1, c2, c3] = clients;
-        id_clients.insert(HelperIdentity::ONE, c1);
-        id_clients.insert(HelperIdentity::TWO, c2);
-        id_clients.insert(HelperIdentity::THREE, c3);
+        id_clients.insert(HelperIdentity::ONE, c1.client);
+        id_clients.insert(HelperIdentity::TWO, c2.client);
+        id_clients.insert(HelperIdentity::THREE, c3.client);
         Self {
             inner_transport: Arc::new(HttpTransport {
                 identity,
@@ -300,21 +300,27 @@ impl ShardHttpTransport {
         identity: ShardIndex,
         server_config: ServerConfig,
         network_config: ShardsConfig,
-        clients: HashMap<ShardIndex, MpcHelperClient>,
+        clients: HashMap<ShardIndex, ShardHelperClient>,
         handler: Option<HandlerRef<ShardIndex>>,
-    ) -> Self {
-        Self::new_internal(identity, clients, handler)
+    ) -> (Self, MpcHelperServer) {
+        let transport = Self::new_internal(identity, clients, handler);
+        let server = MpcHelperServer::new(transport.clone(), server_config, network_config);
+        (transport, server)
     }
 
     fn new_internal(
         identity: ShardIndex,
-        clients: HashMap<ShardIndex, MpcHelperClient>,
+        clients: HashMap<ShardIndex, ShardHelperClient>,
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> Self {
+        let mut base_clients = HashMap::new();
+        for (ix, client) in clients {
+            base_clients.insert(ix, client.client);
+        }
         Self {
             inner_transport: Arc::new(HttpTransport {
                 identity,
-                clients,
+                clients: base_clients,
                 handler,
                 record_streams: StreamCollection::default(),
             }),
@@ -461,7 +467,61 @@ mod tests {
 
     // TODO(651): write a test for an error while reading the body (after error handling is finalized)
 
+    struct HelperConfig {
+        id: HelperIdentity,
+        socket: TcpListener,
+        server_config: ServerConfig,
+        shard_server_config: Vec<ServerConfig>,
+    }
+
     async fn make_helpers(
+        sockets: [TcpListener; 3],
+        server_config: [ServerConfig; 3],
+        ring_config: &RingConfig,
+        shards_config: &ShardsConfig,
+        shards_server_config: Vec<ServerConfig>,
+        disable_https: bool,
+    ) -> [HelperApp; 3] {
+        join_all(
+            zip(HelperIdentity::make_three(), zip(sockets, zip(server_config, shards_server_config))).map(
+                |(id, (socket, (server_config, shard_server_config)))| async move {
+                    let identity = if disable_https {
+                        ClientIdentity::Helper(id)
+                    } else {
+                        get_test_identity(id)
+                    };
+                    let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
+                    let clients = MpcHelperClient::from_conf(ring_config, &identity);
+                    let (transport, server) = MpcHttpTransport::new(
+                        id,
+                        server_config.clone(),
+                        ring_config.clone(),
+                        clients,
+                        Some(mpc_handler),
+                    );
+                    server.start_on(Some(socket), ()).await;
+
+                    let shard_clients = ShardHelperClient::from_conf(shards_config, &identity);
+                    let ix = ShardIndex(0u32);
+                    let shard_transport =
+                        ShardHttpTransport::new(
+                            ix,
+                            shard_server_config,
+                            shards_config.clone(),
+                            shard_clients,
+                            Some(shard_handler));
+
+                    setup.connect(transport, shard_transport)
+                },
+            ),
+        )
+        .await
+        .try_into()
+        .ok()
+        .unwrap()
+    }
+
+    async fn make_helpers_shards(
         sockets: [TcpListener; 3],
         server_config: [ServerConfig; 3],
         ring_config: &RingConfig,
@@ -482,7 +542,7 @@ mod tests {
                     let (transport, server) = MpcHttpTransport::new(
                         id,
                         server_config.clone(),
-                        ring_config,
+                        ring_config.clone(),
                         clients,
                         Some(mpc_handler),
                     );

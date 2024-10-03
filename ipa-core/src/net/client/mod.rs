@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, future::Future, io::{self, BufRead}, marker::PhantomData, pin::Pin, sync::Arc, task::{ready, Context, Poll}
+    collections::HashMap, future::Future, io::{self, BufRead}, pin::Pin, sync::Arc, task::{ready, Context, Poll}
 };
 
 use axum::{
@@ -21,7 +21,7 @@ use tracing::error;
 
 use crate::{
     config::{
-        ClientConfig, HyperClientConfigurator, NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, RingConfig, ShardsConfig
+        ClientConfig, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig, RingConfig, ShardsConfig
     },
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
@@ -324,6 +324,38 @@ impl HelperClient {
             Err(Error::from_failed_resp(resp).await)
         }
     }
+
+    /// Sends a batch of messages associated with a query's step to another helper. Messages are a
+    /// contiguous block of records. Also includes [`crate::protocol::RecordId`] information and
+    /// [`crate::helpers::network::ChannelId`].
+    /// # Errors
+    /// If the request has illegal arguments, or fails to deliver to helper
+    /// # Panics
+    /// If messages size > max u32 (unlikely)
+    pub fn step<S: Stream<Item = Vec<u8>> + Send + 'static>(
+        &self,
+        query_id: QueryId,
+        gate: &Gate,
+        data: S,
+    ) -> Result<ResponseFuture, Error> {
+        let data = data.map(|v| Ok::<bytes::Bytes, Error>(Bytes::from(v)));
+        let body = axum::body::Body::from_stream(data);
+        let req = http_serde::query::step::Request::new(query_id, gate.clone(), body);
+        let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
+        Ok(self.request(req))
+    }
+
+    /// Used to communicate from one helper to another. Specifically, the helper that receives a
+    /// "create query" from an external party must communicate the intent to start a query to the
+    /// other helpers, which this prepare query does.
+    /// # Errors
+    /// If the request has illegal arguments, or fails to deliver to helper
+    pub async fn prepare_query(&self, data: PrepareQuery) -> Result<(), Error> {
+        let req = http_serde::query::prepare::Request::new(data);
+        let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
+        let resp = self.request(req).await?;
+        Self::resp_ok(resp).await
+    }
 }
 
 pub struct ShardHelperClient {
@@ -351,10 +383,10 @@ impl ShardHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &ShardsConfig, identity: &ClientIdentity) -> Vec<Self> {
-        conf.peers()
+    pub fn from_conf(conf: &ShardsConfig, identity: &ClientIdentity) -> HashMap<ShardIndex, Self> {
+        conf.enumerate_peers()
             .into_iter()
-            .map(|peer_conf| ShardHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))
+            .map(|(ix, peer_conf)| (ix, ShardHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key())))
             .collect()
     }
 
@@ -416,18 +448,6 @@ impl MpcHelperClient {
         }
     }
 
-    /// Used to communicate from one helper to another. Specifically, the helper that receives a
-    /// "create query" from an external party must communicate the intent to start a query to the
-    /// other helpers, which this prepare query does.
-    /// # Errors
-    /// If the request has illegal arguments, or fails to deliver to helper
-    pub async fn prepare_query(&self, data: PrepareQuery) -> Result<(), Error> {
-        let req = http_serde::query::prepare::Request::new(data);
-        let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
-        let resp = self.client.request(req).await?;
-        HelperClient::resp_ok(resp).await
-    }
-
     /// Intended to be called externally, e.g. by the report collector. After the report collector
     /// calls "create query", it must then send the data for the query to each of the clients. This
     /// query input contains the data intended for a helper.
@@ -438,26 +458,6 @@ impl MpcHelperClient {
         let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
         let resp = self.client.request(req).await?;
         HelperClient::resp_ok(resp).await
-    }
-
-    /// Sends a batch of messages associated with a query's step to another helper. Messages are a
-    /// contiguous block of records. Also includes [`crate::protocol::RecordId`] information and
-    /// [`crate::helpers::network::ChannelId`].
-    /// # Errors
-    /// If the request has illegal arguments, or fails to deliver to helper
-    /// # Panics
-    /// If messages size > max u32 (unlikely)
-    pub fn step<S: Stream<Item = Vec<u8>> + Send + 'static>(
-        &self,
-        query_id: QueryId,
-        gate: &Gate,
-        data: S,
-    ) -> Result<ResponseFuture, Error> {
-        let data = data.map(|v| Ok::<bytes::Bytes, Error>(Bytes::from(v)));
-        let body = axum::body::Body::from_stream(data);
-        let req = http_serde::query::step::Request::new(query_id, gate.clone(), body);
-        let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
-        Ok(self.client.request(req))
     }
 
     /// Retrieve the status of a query.
@@ -499,6 +499,19 @@ impl MpcHelperClient {
         } else {
             Err(Error::from_failed_resp(resp).await)
         }
+    }
+
+    pub fn step<S: Stream<Item = Vec<u8>> + Send + 'static>(
+        &self,
+        query_id: QueryId,
+        gate: &Gate,
+        data: S,
+    ) -> Result<ResponseFuture, Error> {
+        self.client.step(query_id, gate, data)
+    }
+
+    pub async fn prepare_query(&self, data: PrepareQuery) -> Result<(), Error> {
+        self.client.prepare_query(data).await
     }
 }
 
