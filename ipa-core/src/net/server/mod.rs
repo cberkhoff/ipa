@@ -2,11 +2,7 @@ mod config;
 mod handlers;
 
 use std::{
-    borrow::Cow,
-    io,
-    net::{Ipv4Addr, SocketAddr, TcpListener},
-    ops::Deref,
-    task::{Context, Poll},
+    borrow::Cow, io, marker::PhantomData, net::{Ipv4Addr, SocketAddr, TcpListener}, ops::Deref, task::{Context, Poll}
 };
 
 use ::tokio::{
@@ -37,15 +33,15 @@ use rustls_pki_types::CertificateDer;
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::future as tokio;
 use tokio_rustls::server::TlsStream;
-use tower::{layer::layer_fn, Service};
+use tower::{layer::layer_fn, Layer, Service};
 use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{OwnedCertificate, OwnedPrivateKey, NetworkConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::{HelperIdentity, TransportIdentity}, net::{
+    config::{NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::{HelperIdentity, TransportIdentity}, net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
         MpcHttpTransport, CRYPTO_PROVIDER,
-    }, sharding::TransportRestriction, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
+    }, sharding::{HelpersRing, IntraHelper, TransportRestriction}, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
 };
 
 pub trait TracingSpanMaker: Send + Sync + Clone + 'static {
@@ -71,24 +67,44 @@ impl TracingSpanMaker for () {
 /// IPA helper web service
 ///
 /// `MpcHelperServer` handles requests from both peer helpers and external clients.
-pub struct MpcHelperServer<T: TransportRestriction> {
+pub struct MpcHelperServer<R: TransportRestriction> {
     config: ServerConfig,
-    network_config: NetworkConfig,
+    network_config: NetworkConfig<R>,
     router: Router,
+    id_header_layer: ClientIdentityFromHeaderLayer<R>,
 }
 
-impl MpcHelperServer {
+impl MpcHelperServer<HelpersRing> {
     pub fn new(
         transport: MpcHttpTransport,
         config: ServerConfig,
-        network_config: NetworkConfig,
+        network_config: NetworkConfig<HelpersRing>,
     ) -> Self {
         MpcHelperServer {
             config,
             network_config,
-            router: handlers::router(transport.clone())
+            router: handlers::router(transport.clone()),
+            id_header_layer: ClientIdentityFromHeaderLayer::new(),
         }
     }
+}
+
+/*impl MpcHelperServer<IntraHelper> {
+    pub fn new(
+        transport: MpcHttpTransport,
+        config: ServerConfig,
+        network_config: NetworkConfig<IntraHelper>,
+    ) -> Self {
+        MpcHelperServer {
+            config,
+            network_config,
+            router: super::http_serde::echo::router(),
+            id_header_name: HeaderName::from_static("x-unverified-shard-index"),
+        }
+    }
+}*/
+
+impl<R: TransportRestriction> MpcHelperServer<R> {
 
     #[cfg(all(test, unit_test))]
     async fn handle_req(&self, req: hyper::Request<axum::body::Body>) -> axum::response::Response {
@@ -135,19 +151,19 @@ impl MpcHelperServer {
         let task_handle = match (self.config.disable_https, listener) {
             (true, Some(listener)) => {
                 let svc = svc
-                    .layer(layer_fn(SetClientIdentityFromHeader::new))
+                    .layer(self.id_header_layer.clone())
                     .into_make_service();
                 spawn_server(axum_server::from_tcp(listener), handle.clone(), svc).await
             }
             (true, None) => {
                 let addr = SocketAddr::new(BIND_ADDRESS.into(), self.config.port.unwrap_or(0));
                 let svc = svc
-                    .layer(layer_fn(SetClientIdentityFromHeader::new))
+                    .layer(self.id_header_layer.clone())
                     .into_make_service();
                 spawn_server(axum_server::bind(addr), handle.clone(), svc).await
             }
             (false, Some(listener)) => {
-                let rustls_config = rustls_config(&self.config, &self.network_config)
+                let rustls_config = rustls_config(&self.config, self.network_config.vec_peers())
                     .await
                     .expect("invalid TLS configuration");
                 spawn_server(
@@ -161,7 +177,7 @@ impl MpcHelperServer {
             }
             (false, None) => {
                 let addr = SocketAddr::new(BIND_ADDRESS.into(), self.config.port.unwrap_or(0));
-                let rustls_config = rustls_config(&self.config, &self.network_config)
+                let rustls_config = rustls_config(&self.config, self.network_config.vec_peers())
                     .await
                     .expect("invalid TLS configuration");
                 spawn_server(
@@ -263,15 +279,14 @@ async fn certificate_and_key(
 /// If there is a problem with the TLS configuration.
 async fn rustls_config(
     config: &ServerConfig,
-    certs: Vec<&OwnedCertificate>,
+    certs: Vec<PeerConfig>,
 ) -> Result<RustlsConfig, BoxError> {
     let (cert, key) = certificate_and_key(config).await?;
 
     let mut trusted_certs = RootCertStore::empty();
-    for cert in network
-        .peers()
-        .iter()
-        .filter_map(|peer| peer.certificate.clone())
+    for cert in certs
+        .into_iter()
+        .filter_map(|peer| peer.certificate)
     {
         // Note that this uses `webpki::TrustAnchor::try_from_cert_der`, which *does not* validate
         // the certificate. That is not required for security, but might be desirable to flag
@@ -314,51 +329,31 @@ impl<I: TransportIdentity> Deref for ClientIdentity<I> {
 }
 
 /// `Accept`or that sets an axum `Extension` indiciating the authenticated remote helper identity.
+/// Validating the certificate is something that happens earlier at connection time, this just 
+/// provide identity to the inner server handlers.
 #[derive(Clone)]
-struct ClientCertRecognizingAcceptor {
+struct ClientCertRecognizingAcceptor<R: TransportRestriction> {
     inner: RustlsAcceptor,
-    network_config: Arc<NetworkConfig>,
+    network_config: Arc<NetworkConfig<R>>,
 }
 
-impl ClientCertRecognizingAcceptor {
-    fn new(inner: RustlsAcceptor, network_config: NetworkConfig) -> Self {
+impl<R: TransportRestriction> ClientCertRecognizingAcceptor<R> {
+    fn new(inner: RustlsAcceptor, network_config: NetworkConfig<R>) -> Self {
         Self {
             inner,
             network_config: Arc::new(network_config),
         }
     }
-
-    // This can't be a method (at least not that takes `&self`) because it needs to go in a 'static future.
-    fn identify_client(
-        network_config: &NetworkConfig,
-        cert_option: Option<&CertificateDer>,
-    ) -> Option<ClientIdentity> {
-        let cert = cert_option?;
-        // We currently require an exact match with the peer cert (i.e. we don't support verifying
-        // the certificate against a truststore and identifying the peer by the certificate
-        // subject). This could be changed if the need arises.
-        for (id, peer) in network_config.enumerate_peers() {
-            if peer.certificate.as_ref() == Some(cert) {
-                return Some(ClientIdentity(id));
-            }
-        }
-        // It might be nice to log something here. We could log the certificate base64?
-        error!(
-            "A client certificate was presented that does not match a known helper. Certificate: {}",
-            BASE64.encode(cert),
-        );
-        None
-    }
 }
 
-impl<I, S, NC> Accept<I, S> for ClientCertRecognizingAcceptor<NC>
+impl<I, S, R> Accept<I, S> for ClientCertRecognizingAcceptor<R>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: Send + 'static,
-    NC: NetworkConfig,
+    R: TransportRestriction,
 {
     type Stream = TlsStream<I>;
-    type Service = SetClientIdentityFromCertificate<S>;
+    type Service = SetClientIdentityFromCertificate<S, R>;
     type Future = BoxFuture<'static, io::Result<(Self::Stream, Self::Service)>>;
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
@@ -378,27 +373,31 @@ where
             //    certificate here, because the certificate must have passed full verification at
             //    connection time. But it's possible the certificate subject is not something we
             //    recognize as a helper.
-            let id = Self::identify_client(
-                &network_config,
-                stream
-                    .get_ref()
-                    .1
-                    .peer_certificates()
-                    .and_then(<[_]>::first),
-            );
-            let service = SetClientIdentityFromCertificate { inner: service, id };
+            let cert = stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .and_then(<[_]>::first)
+                .expect("Unable to remove certificate from stream");
+            let option_id: Option<<R as TransportRestriction>::Identity> = network_config.identify_cert(cert);
+            let client_id = option_id.map(|id| ClientIdentity(id));
+            let service = SetClientIdentityFromCertificate { inner: service, id: client_id };
             Ok((stream, service))
         })
     }
 }
 
 #[derive(Clone)]
-struct SetClientIdentityFromCertificate<S> {
+struct SetClientIdentityFromCertificate<S, R: TransportRestriction> {
     inner: S,
-    id: Option<ClientIdentity>,
+    id: Option<ClientIdentity<R::Identity>>,
 }
 
-impl<B, S: Service<Request<B>>> Service<Request<B>> for SetClientIdentityFromCertificate<S> {
+impl<B, R, S> Service<Request<B>> for SetClientIdentityFromCertificate<S, R> 
+where 
+    S: Service<Request<B>>,
+    R: TransportRestriction,
+{
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;
@@ -416,31 +415,55 @@ impl<B, S: Service<Request<B>>> Service<Request<B>> for SetClientIdentityFromCer
     }
 }
 
-/// Name of the header that passes the client identity when not using HTTPS.
-pub static HTTP_CLIENT_ID_HEADER: HeaderName =
-    HeaderName::from_static("x-unverified-client-identity");
+#[derive(Clone)]
+struct ClientIdentityFromHeaderLayer<R: TransportRestriction>{
+    restriction: PhantomData<R>,
+    header_name: HeaderName,
+}
 
-/// Name of the header that passes the shard index when not using HTTPS.
-pub static HTTP_SHARD_INDEX_HEADER: HeaderName =
-    HeaderName::from_static("x-unverified-shard-index");
+impl ClientIdentityFromHeaderLayer<HelpersRing> {
+    fn new() -> Self {
+        Self {
+            restriction: PhantomData,
+            header_name: HeaderName::from_static("x-unverified-client-identity"),
+        }
+    }
+}
+
+impl<S, R: TransportRestriction> Layer<S> for ClientIdentityFromHeaderLayer<R> {
+    type Service = SetClientIdentityFromHeader<S, R>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        SetClientIdentityFromHeader { inner, header_name: self.header_name.clone(), restriction: PhantomData }
+    }
+}
 
 /// Service wrapper that gets a client helper identity from a header.
 ///
 /// Since this allows a client to claim any identity, it is completely
 /// insecure. It must only be used in contexts where that is acceptable.
 #[derive(Clone)]
-struct SetClientIdentityFromHeader<S> {
+struct SetClientIdentityFromHeader<S, R: TransportRestriction> {
     inner: S,
+    /// Name of the header that passes the client identity when not using HTTPS.
+    header_name: HeaderName,
+    restriction: PhantomData<R>,
 }
 
-impl<S> SetClientIdentityFromHeader<S> {
-    fn new(inner: S) -> Self {
-        Self { inner }
+impl<S, R: TransportRestriction> SetClientIdentityFromHeader<S, R> {
+    fn new(inner: S, header_name: HeaderName) -> Self {
+        Self { 
+            inner,
+            header_name,
+            restriction: PhantomData 
+        }
     }
 }
 
-impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
-    for SetClientIdentityFromHeader<S>
+impl<B, S, R> Service<Request<B>> for SetClientIdentityFromHeader<S, R>
+where
+    S: Service<Request<B>, Response = Response>,
+    R: TransportRestriction,
 {
     type Response = Response;
     type Error = S::Error;
@@ -452,9 +475,9 @@ impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
     }
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
-        if let Some(header_value) = req.headers().get(&HTTP_CLIENT_ID_HEADER) {
-            let id_result = serde_json::from_slice(header_value.as_ref())
-                .map_err(|e| Error::InvalidHeader(format!("{HTTP_CLIENT_ID_HEADER}: {e}").into()));
+        if let Some(header_value) = req.headers().get(self.header_name.clone()) {
+            let id_result = R::Identity::from_bits(header_value.as_ref())
+                .map_err(|e| Error::InvalidHeader(format!("{}: {e}", self.header_name).into()));
             match id_result {
                 Ok(id) => req.extensions_mut().insert(ClientIdentity(id)),
                 Err(err) => return ready(Ok(err.into_response())).right_future(),

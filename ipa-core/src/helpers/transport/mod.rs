@@ -1,3 +1,4 @@
+use core::str;
 use std::{
     borrow::{Borrow, Cow},
     fmt::Debug,
@@ -6,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
+use serde::Deserialize;
 
 use crate::{
     helpers::HelperIdentity,
@@ -44,11 +46,17 @@ pub trait Identity:
     Copy + Clone + Debug + PartialEq + Eq + PartialOrd + Ord + Hash + Send + Sync + 'static
 {
     fn as_str(&self) -> Cow<'static, str>;
+
+    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error>;
 }
 
 impl Identity for ShardIndex {
     fn as_str(&self) -> Cow<'static, str> {
         Cow::Owned(self.to_string())
+    }
+    
+    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
+        parse_id(s)
     }
 }
 impl Identity for HelperIdentity {
@@ -60,6 +68,10 @@ impl Identity for HelperIdentity {
             _ => unreachable!(),
         })
     }
+    
+    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
+        parse_id(s)
+    }
 }
 
 /// Role is an identifier of helper peer, only valid within a given query. For every query, there
@@ -68,6 +80,15 @@ impl Identity for Role {
     fn as_str(&self) -> Cow<'static, str> {
         Cow::Borrowed(Role::as_static_str(self))
     }
+
+    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
+        parse_id(s)
+    }
+}
+
+fn parse_id<'a, S: Deserialize<'a>>(s: &'a [u8]) -> Result<S, crate::error::Error> {
+    serde_json::from_slice(s).map_err(|_e| 
+        crate::error::Error::InvalidId(str::from_utf8(s).unwrap_or("<unparseable>").to_owned()))
 }
 
 pub trait ResourceIdentifier: Sized {}

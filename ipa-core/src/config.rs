@@ -1,5 +1,5 @@
 use std::{
-    array, borrow::{Borrow, Cow}, collections::HashMap, fmt::{Debug, Formatter}, iter::Zip, path::PathBuf, slice, time::Duration
+    array, borrow::{Borrow, Cow}, collections::HashMap, fmt::{Debug, Formatter}, iter::Zip, marker::PhantomData, path::PathBuf, slice, time::Duration
 };
 
 use hyper::{http::uri::Scheme, Uri};
@@ -15,7 +15,7 @@ use crate::{
     hpke::{
         Deserializable as _, IpaPrivateKey, IpaPublicKey, KeyRegistry, PrivateKeyOnly,
         PublicKeyOnly, Serializable as _,
-    }, sharding::ShardIndex,
+    }, sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
 };
 
 pub type OwnedCertificate = CertificateDer<'static>;
@@ -37,37 +37,18 @@ pub enum Error {
 /// The most important thing this contains is discovery information for each of the participating
 /// peers.
 #[derive(Clone, Debug, Deserialize)]
-pub struct NetworkConfig {
-    /// Information about each helper participating in the network. The order that helpers are
-    /// listed here determines their assigned helper identities in the network. Note that while the
-    /// helper identities are stable, roles are assigned per query.
-    pub peers: [PeerConfig; 3],
+pub struct NetworkConfig<R: TransportRestriction> {
+    peers: Vec<PeerConfig>,
 
     /// HTTP client configuration.
     #[serde(default)]
     pub client: ClientConfig,
+
+    #[serde(skip)]
+    restriction: PhantomData<R>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct ShardsConfig {
-    pub peers: Vec<PeerConfig>,
-
-    /// HTTP client configuration.
-    #[serde(default)]
-    pub client: ClientConfig,
-}
-
-impl ShardsConfig {
-    pub fn enumerate_peers(&self) -> HashMap<ShardIndex, &PeerConfig> {
-        let mut indexed_peers = HashMap::new();
-        for (i, p) in self.peers.iter().enumerate() {
-            indexed_peers.insert(ShardIndex(i.try_into().unwrap()), p);
-        }
-        indexed_peers
-    }
-}
-
-impl NetworkConfig {
+impl<R: TransportRestriction> NetworkConfig<R> {
     /// Reads config from string. Expects config to be toml format.
     /// To read file, use `fs::read_to_string`
     ///
@@ -84,29 +65,12 @@ impl NetworkConfig {
         Ok(conf)
     }
 
-    pub fn new(peers: [PeerConfig; 3], client: ClientConfig) -> Self {
-        Self { peers, client }
-    }
-
-    pub fn peers(&self) -> &[PeerConfig; 3] {
-        &self.peers
-    }
-
-    // Can maybe be replaced with array::zip when stable?
-    pub fn enumerate_peers(
-        &self,
-    ) -> Zip<array::IntoIter<HelperIdentity, 3>, slice::Iter<PeerConfig>> {
-        HelperIdentity::make_three()
-            .into_iter()
-            .zip(self.peers.iter())
-    }
-
     /// # Panics
     /// If `PathAndQuery::from_str("")` fails
     #[must_use]
-    pub fn override_scheme(self, scheme: &Scheme) -> NetworkConfig {
-        NetworkConfig {
-            peers: self.peers.map(|mut peer| {
+    pub fn override_scheme(self, scheme: &Scheme) -> Self {
+        Self {
+            peers: self.peers.into_iter().map(|mut peer| {
                 let mut parts = peer.url.into_parts();
                 parts.scheme = Some(scheme.clone());
                 // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
@@ -116,10 +80,60 @@ impl NetworkConfig {
                 }
                 peer.url = Uri::try_from(parts).unwrap();
                 peer
-            }),
+            }).collect(),
             ..self
         }
     }
+
+    pub fn vec_peers(&self) -> Vec<PeerConfig> {
+        self.peers.clone()
+    }
+
+    /// We currently require an exact match with the peer cert (i.e. we don't support verifying
+    /// the certificate against a truststore and identifying the peer by the certificate
+    /// subject). This could be changed if the need arises.
+    pub fn identify_cert(&self, cert: &CertificateDer) -> Option<R::Identity> {
+        for (id, peer) in self.enumerate_peers() {
+            if peer.certificate.as_ref() == Some(cert) {
+                return Some(ClientIdentity(id));
+            }
+        }
+        todo!()
+    }
+
+}
+
+impl NetworkConfig<IntraHelper> {
+    pub fn enumerate_peers(&self) -> HashMap<ShardIndex, &PeerConfig> {
+        let mut indexed_peers = HashMap::new();
+        for (i, p) in self.peers.iter().enumerate() {
+            indexed_peers.insert(ShardIndex(i.try_into().unwrap()), p);
+        }
+        indexed_peers
+    }
+}
+
+impl NetworkConfig<HelpersRing> {
+    
+    pub fn new(ring: [PeerConfig; 3], client: ClientConfig) -> Self {
+        Self { peers: ring.to_vec(), client, restriction: PhantomData }
+    }
+
+    pub fn peers(&self) -> [PeerConfig; 3] {
+        self.peers.clone().try_into()
+            .unwrap_or_else(|v: Vec<_>| panic!("Expected a Vec of length 3 but it was {}", v.len()))
+    }
+
+    // Can maybe be replaced with array::zip when stable?
+    pub fn enumerate_peers(
+        &self,
+    ) -> Zip<array::IntoIter<HelperIdentity, 3>, slice::Iter<PeerConfig>> {
+        HelperIdentity::make_three()
+            .into_iter()
+            .zip(self.peers().iter())
+    }
+
+    
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -434,7 +448,7 @@ pub struct KeyRegistries(Vec<KeyRegistry<PublicKeyOnly>>);
 impl KeyRegistries {
     /// # Panics
     /// If network file is improperly formatted
-    pub fn init_from(&mut self, network: &NetworkConfig) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
+    pub fn init_from(&mut self, network: &NetworkConfig<HelpersRing>) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
         let configs = network.peers().iter().try_fold(Vec::new(), |acc, peer| {
             if let (mut vec, Some(hpke_config)) = (acc, peer.hpke_config.as_ref()) {

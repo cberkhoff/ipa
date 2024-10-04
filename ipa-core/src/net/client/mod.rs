@@ -21,14 +21,14 @@ use tracing::error;
 
 use crate::{
     config::{
-        ClientConfig, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig, NetworkConfig, ShardsConfig
+        ClientConfig, HyperClientConfigurator, NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig,
     },
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
         HelperIdentity,
     },
     net::{http_serde, server::{HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER}, Error, CRYPTO_PROVIDER},
-    protocol::{Gate, QueryId}, sharding::ShardIndex,
+    protocol::{Gate, QueryId}, sharding::{HelpersRing, IntraHelper, ShardIndex},
 };
 
 #[derive(Default)]
@@ -383,7 +383,7 @@ impl ShardHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &ShardsConfig, identity: &ClientIdentity) -> HashMap<ShardIndex, Self> {
+    pub fn from_conf(conf: &NetworkConfig<IntraHelper>, identity: &ClientIdentity) -> HashMap<ShardIndex, Self> {
         conf.enumerate_peers()
             .into_iter()
             .map(|(ix, peer_conf)| (ix, ShardHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key())))
@@ -420,7 +420,7 @@ impl MpcHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &NetworkConfig, identity: &ClientIdentity) -> [Self; 3] {
+    pub fn from_conf(conf: &NetworkConfig<HelpersRing>, identity: &ClientIdentity) -> [Self; 3] {
         conf.peers()
             .each_ref()
             .map(|peer_conf| MpcHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))
