@@ -21,7 +21,7 @@ use tracing::error;
 
 use crate::{
     config::{
-        ClientConfig, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig, RingConfig, ShardsConfig
+        ClientConfig, HyperClientConfigurator, OwnedCertificate, OwnedPrivateKey, PeerConfig, NetworkConfig, ShardsConfig
     },
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
@@ -420,7 +420,7 @@ impl MpcHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &RingConfig, identity: &ClientIdentity) -> [Self; 3] {
+    pub fn from_conf(conf: &NetworkConfig, identity: &ClientIdentity) -> [Self; 3] {
         conf.peers()
             .each_ref()
             .map(|peer_conf| MpcHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))

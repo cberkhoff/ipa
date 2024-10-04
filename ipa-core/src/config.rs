@@ -31,17 +31,13 @@ pub enum Error {
     IOError(#[from] std::io::Error),
 }
 
-pub trait NetworkConfig {
-    fn certificates() -> Vec<OwnedCertificate>;
-}
-
 /// Configuration describing 3 peers. In the sharded world this would be a ring, in the non-sharded
 /// case it's the entire network.
 ///
 /// The most important thing this contains is discovery information for each of the participating
 /// peers.
 #[derive(Clone, Debug, Deserialize)]
-pub struct RingConfig {
+pub struct NetworkConfig {
     /// Information about each helper participating in the network. The order that helpers are
     /// listed here determines their assigned helper identities in the network. Note that while the
     /// helper identities are stable, roles are assigned per query.
@@ -71,7 +67,7 @@ impl ShardsConfig {
     }
 }
 
-impl RingConfig {
+impl NetworkConfig {
     /// Reads config from string. Expects config to be toml format.
     /// To read file, use `fs::read_to_string`
     ///
@@ -108,8 +104,8 @@ impl RingConfig {
     /// # Panics
     /// If `PathAndQuery::from_str("")` fails
     #[must_use]
-    pub fn override_scheme(self, scheme: &Scheme) -> RingConfig {
-        RingConfig {
+    pub fn override_scheme(self, scheme: &Scheme) -> NetworkConfig {
+        NetworkConfig {
             peers: self.peers.map(|mut peer| {
                 let mut parts = peer.url.into_parts();
                 parts.scheme = Some(scheme.clone());
@@ -438,7 +434,7 @@ pub struct KeyRegistries(Vec<KeyRegistry<PublicKeyOnly>>);
 impl KeyRegistries {
     /// # Panics
     /// If network file is improperly formatted
-    pub fn init_from(&mut self, network: &RingConfig) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
+    pub fn init_from(&mut self, network: &NetworkConfig) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
         let configs = network.peers().iter().try_fold(Vec::new(), |acc, peer| {
             if let (mut vec, Some(hpke_config)) = (acc, peer.hpke_config.as_ref()) {

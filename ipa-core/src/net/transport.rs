@@ -11,7 +11,7 @@ use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
 use crate::{
-    config::{RingConfig, ServerConfig, ShardsConfig},
+    config::{NetworkConfig, ServerConfig, ShardsConfig},
     helpers::{
         query::QueryConfig,
         routing::{Addr, RouteId},
@@ -194,7 +194,7 @@ impl MpcHttpTransport {
     pub fn new(
         identity: HelperIdentity,
         server_config: ServerConfig,
-        network_config: RingConfig,
+        network_config: NetworkConfig,
         clients: [MpcHelperClient; 3],
         handler: Option<HandlerRef<HelperIdentity>>,
     ) -> (Self, MpcHelperServer) {
@@ -379,7 +379,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{RingConfig, ServerConfig},
+        config::{NetworkConfig, ServerConfig},
         ff::{FieldType, Fp31, Serializable},
         helpers::{
             make_owned_handler,
@@ -477,7 +477,7 @@ mod tests {
     async fn make_helpers(
         sockets: [TcpListener; 3],
         server_config: [ServerConfig; 3],
-        ring_config: &RingConfig,
+        ring_config: &NetworkConfig,
         shards_config: &ShardsConfig,
         shards_server_config: Vec<ServerConfig>,
         disable_https: bool,
@@ -524,7 +524,7 @@ mod tests {
     async fn make_helpers_shards(
         sockets: [TcpListener; 3],
         server_config: [ServerConfig; 3],
-        ring_config: &RingConfig,
+        ring_config: &NetworkConfig,
         shards_config: &ShardsConfig,
         shards_server_config: Vec<ServerConfig>,
         disable_https: bool,

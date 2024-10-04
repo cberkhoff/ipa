@@ -15,7 +15,7 @@ use ipa_core::{
     cli::{
         client_config_setup, keygen, test_setup, ConfGenArgs, KeygenArgs, TestSetupArgs, Verbosity,
     },
-    config::{hpke_registry, HpkeServerConfig, RingConfig, ServerConfig, ShardsConfig, TlsConfig},
+    config::{hpke_registry, HpkeServerConfig, NetworkConfig, ServerConfig, ShardsConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{ClientIdentity, MpcHelperClient, MpcHttpTransport, ShardHttpTransport},
@@ -211,7 +211,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
         Scheme::HTTPS
     };
     let network_config_path = args.ring_network.as_deref().unwrap();
-    let network_config = RingConfig::from_toml_str(&fs::read_to_string(network_config_path)?)?
+    let network_config = NetworkConfig::from_toml_str(&fs::read_to_string(network_config_path)?)?
         .override_scheme(&scheme);
     let clients = MpcHelperClient::from_conf(&network_config, &mpc_identity);
 

@@ -42,7 +42,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{OwnedCertificate, OwnedPrivateKey, RingConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::{HelperIdentity, TransportIdentity}, net::{
+    config::{OwnedCertificate, OwnedPrivateKey, NetworkConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::{HelperIdentity, TransportIdentity}, net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
         MpcHttpTransport, CRYPTO_PROVIDER,
     }, sharding::TransportRestriction, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
@@ -73,15 +73,15 @@ impl TracingSpanMaker for () {
 /// `MpcHelperServer` handles requests from both peer helpers and external clients.
 pub struct MpcHelperServer<T: TransportRestriction> {
     config: ServerConfig,
-    network_config: NC,
+    network_config: NetworkConfig,
     router: Router,
 }
 
-impl<NC> MpcHelperServer<NC> {
+impl MpcHelperServer {
     pub fn new(
         transport: MpcHttpTransport,
         config: ServerConfig,
-        network_config: RingConfig,
+        network_config: NetworkConfig,
     ) -> Self {
         MpcHelperServer {
             config,
@@ -317,11 +317,11 @@ impl<I: TransportIdentity> Deref for ClientIdentity<I> {
 #[derive(Clone)]
 struct ClientCertRecognizingAcceptor {
     inner: RustlsAcceptor,
-    network_config: Arc<RingConfig>,
+    network_config: Arc<NetworkConfig>,
 }
 
 impl ClientCertRecognizingAcceptor {
-    fn new(inner: RustlsAcceptor, network_config: RingConfig) -> Self {
+    fn new(inner: RustlsAcceptor, network_config: NetworkConfig) -> Self {
         Self {
             inner,
             network_config: Arc::new(network_config),
@@ -330,7 +330,7 @@ impl ClientCertRecognizingAcceptor {
 
     // This can't be a method (at least not that takes `&self`) because it needs to go in a 'static future.
     fn identify_client(
-        network_config: &RingConfig,
+        network_config: &NetworkConfig,
         cert_option: Option<&CertificateDer>,
     ) -> Option<ClientIdentity> {
         let cert = cert_option?;

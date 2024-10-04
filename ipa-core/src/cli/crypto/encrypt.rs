@@ -10,7 +10,7 @@ use rand::thread_rng;
 
 use crate::{
     cli::playbook::{BreakdownKey, InputSource, Timestamp, TriggerValue},
-    config::{KeyRegistries, RingConfig},
+    config::{KeyRegistries, NetworkConfig},
     error::BoxError,
     report::{OprfReport, DEFAULT_KEY_ID},
     secret_sharing::IntoShares,
@@ -55,7 +55,7 @@ impl EncryptArgs {
         let mut key_registries = KeyRegistries::default();
 
         let network =
-            RingConfig::from_toml_str(&read_to_string(&self.network).unwrap_or_else(|e| {
+            NetworkConfig::from_toml_str(&read_to_string(&self.network).unwrap_or_else(|e| {
                 panic!("Failed to open network file: {:?}. {}", &self.network, e)
             }))
             .unwrap_or_else(|e| {
