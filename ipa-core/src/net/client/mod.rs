@@ -27,7 +27,7 @@ use crate::{
         query::{PrepareQuery, QueryConfig, QueryInput},
         HelperIdentity,
     },
-    net::{http_serde, server::{HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER}, Error, CRYPTO_PROVIDER},
+    net::{http_serde, HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER, Error, CRYPTO_PROVIDER},
     protocol::{Gate, QueryId}, sharding::{HelpersRing, IntraHelper, ShardIndex},
 };
 

@@ -2,7 +2,8 @@ mod config;
 mod handlers;
 
 use std::{
-    borrow::Cow, io, marker::PhantomData, net::{Ipv4Addr, SocketAddr, TcpListener}, ops::Deref, task::{Context, Poll}
+    borrow::Cow, collections::HashMap, io, marker::PhantomData, net::{Ipv4Addr, SocketAddr, TcpListener}, ops::Deref, task::{Context, Poll},
+    hash::{Hash, Hasher},
 };
 
 use ::tokio::{
@@ -358,7 +359,7 @@ where
 
     fn accept(&self, stream: I, service: S) -> Self::Future {
         let acceptor = self.inner.clone();
-        let network_config = Arc::clone(&self.network_config);
+        let network_config = self.network_config.clone();
 
         Box::pin(async move {
             let (stream, service) = acceptor.accept(stream, service).await.map_err(|err| {
@@ -386,6 +387,8 @@ where
         })
     }
 }
+
+
 
 #[derive(Clone)]
 struct SetClientIdentityFromCertificate<S, R: TransportRestriction> {
@@ -418,14 +421,14 @@ where
 #[derive(Clone)]
 struct ClientIdentityFromHeaderLayer<R: TransportRestriction>{
     restriction: PhantomData<R>,
-    header_name: HeaderName,
+    header_name: &'static HeaderName,
 }
 
 impl ClientIdentityFromHeaderLayer<HelpersRing> {
     fn new() -> Self {
         Self {
             restriction: PhantomData,
-            header_name: HeaderName::from_static("x-unverified-client-identity"),
+            header_name: &super::HTTP_CLIENT_ID_HEADER,
         }
     }
 }

@@ -17,7 +17,7 @@ use futures_util::{
 use hyper::{Request, StatusCode};
 use tower::{layer::layer_fn, Service};
 
-use crate::net::{server::ClientIdentity, MpcHttpTransport};
+use crate::{helpers::HelperIdentity, net::{server::ClientIdentity, MpcHttpTransport}};
 
 /// Construct router for IPA query web service
 ///
@@ -85,7 +85,7 @@ impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
-        match req.extensions().get() {
+        match req.extensions().get::<ClientIdentity<HelperIdentity>>() {
             Some(ClientIdentity(_)) => self.inner.call(req).left_future(),
             None => ready(Ok((
                 StatusCode::UNAUTHORIZED,

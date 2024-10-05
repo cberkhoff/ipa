@@ -323,6 +323,21 @@ impl From<Role> for &'static str {
     }
 }
 
+impl TryFrom<usize> for Role {
+    type Error = String;
+
+    fn try_from(id: usize) -> std::result::Result<Self, Self::Error> {
+        match id {
+            1 => Ok(H1),
+            2 => Ok(H2),
+            3 => Ok(H3),
+            other => Err(format!(
+                "{other} must be within [1, 3] range to be a valid Role"
+            )),
+        }
+    }
+}
+
 impl TryFrom<&str> for Role {
     type Error = crate::error::Error;
 

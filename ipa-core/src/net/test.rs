@@ -19,21 +19,15 @@ use tokio::task::JoinHandle;
 
 use crate::{
     config::{
-        ClientConfig, HpkeClientConfig, HpkeServerConfig, PeerConfig, NetworkConfig, ServerConfig,
-        TlsConfig,
-    },
-    helpers::{HandlerBox, HelperIdentity, RequestHandler},
-    hpke::{Deserializable as _, IpaPublicKey},
-    net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport},
-    sync::Arc,
-    test_fixture::metrics::MetricsHandle,
+        ClientConfig, HpkeClientConfig, HpkeServerConfig, NetworkConfig, PeerConfig, ServerConfig, TlsConfig
+    }, helpers::{HandlerBox, HelperIdentity, RequestHandler}, hpke::{Deserializable as _, IpaPublicKey}, net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport}, sharding::HelpersRing, sync::Arc, test_fixture::metrics::MetricsHandle
 };
 
 pub const DEFAULT_TEST_PORTS: [u16; 3] = [3000, 3001, 3002];
 
 pub struct TestConfig {
     pub disable_https: bool,
-    pub network: NetworkConfig,
+    pub network: NetworkConfig<HelpersRing>,
     pub servers: [ServerConfig; 3],
     pub sockets: Option<[TcpListener; 3]>,
 }
@@ -177,7 +171,7 @@ impl TestConfigBuilder {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        let network = NetworkConfig {
+        let network = NetworkConfig<HelpersRing> {
             peers,
             client: self
                 .use_http1

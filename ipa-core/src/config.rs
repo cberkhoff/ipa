@@ -1,5 +1,5 @@
 use std::{
-    array, borrow::{Borrow, Cow}, collections::HashMap, fmt::{Debug, Formatter}, iter::Zip, marker::PhantomData, path::PathBuf, slice, time::Duration
+    array, borrow::{Borrow, Cow}, collections::HashMap, fmt::{Debug, Formatter}, iter::Zip, marker::PhantomData, path::PathBuf, time::Duration
 };
 
 use hyper::{http::uri::Scheme, Uri};
@@ -89,16 +89,20 @@ impl<R: TransportRestriction> NetworkConfig<R> {
         self.peers.clone()
     }
 
+    pub fn peers_iter(&self) -> std::slice::Iter<'_, PeerConfig> {
+        self.peers.iter()
+    }
+
     /// We currently require an exact match with the peer cert (i.e. we don't support verifying
     /// the certificate against a truststore and identifying the peer by the certificate
     /// subject). This could be changed if the need arises.
     pub fn identify_cert(&self, cert: &CertificateDer) -> Option<R::Identity> {
-        for (id, peer) in self.enumerate_peers() {
+        for (ix, peer) in self.peers.iter().enumerate() {
             if peer.certificate.as_ref() == Some(cert) {
-                return Some(ClientIdentity(id));
+                return ix.try_into().ok();
             }
         }
-        todo!()
+        None
     }
 
 }
@@ -127,10 +131,10 @@ impl NetworkConfig<HelpersRing> {
     // Can maybe be replaced with array::zip when stable?
     pub fn enumerate_peers(
         &self,
-    ) -> Zip<array::IntoIter<HelperIdentity, 3>, slice::Iter<PeerConfig>> {
+    ) -> Zip<array::IntoIter<HelperIdentity, 3>, array::IntoIter<PeerConfig, 3>> {
         HelperIdentity::make_three()
             .into_iter()
-            .zip(self.peers().iter())
+            .zip(self.peers())
     }
 
     
@@ -450,7 +454,7 @@ impl KeyRegistries {
     /// If network file is improperly formatted
     pub fn init_from(&mut self, network: &NetworkConfig<HelpersRing>) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
-        let configs = network.peers().iter().try_fold(Vec::new(), |acc, peer| {
+        let configs = network.peers_iter().try_fold(Vec::new(), |acc, peer| {
             if let (mut vec, Some(hpke_config)) = (acc, peer.hpke_config.as_ref()) {
                 vec.push(hpke_config);
                 Some(vec)

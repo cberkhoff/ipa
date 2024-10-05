@@ -11,7 +11,7 @@ use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
 use crate::{
-    config::{NetworkConfig, ServerConfig, ShardsConfig},
+    config::{NetworkConfig, ServerConfig},
     helpers::{
         query::QueryConfig,
         routing::{Addr, RouteId},
@@ -21,7 +21,7 @@ use crate::{
     },
     net::{client::MpcHelperClient, error::Error, MpcHelperServer},
     protocol::{Gate, QueryId},
-    sharding::ShardIndex,
+    sharding::{HelpersRing, IntraHelper, ShardIndex},
     sync::Arc,
 };
 
@@ -194,10 +194,10 @@ impl MpcHttpTransport {
     pub fn new(
         identity: HelperIdentity,
         server_config: ServerConfig,
-        network_config: NetworkConfig,
+        network_config: NetworkConfig<HelpersRing>,
         clients: [MpcHelperClient; 3],
         handler: Option<HandlerRef<HelperIdentity>>,
-    ) -> (Self, MpcHelperServer) {
+    ) -> (Self, MpcHelperServer<HelpersRing>) {
         let transport = Self::new_internal(identity, clients, handler);
         let server = MpcHelperServer::new(transport.clone(), server_config, network_config);
         (transport, server)
@@ -299,10 +299,10 @@ impl ShardHttpTransport {
     pub fn new(
         identity: ShardIndex,
         server_config: ServerConfig,
-        network_config: ShardsConfig,
+        network_config: NetworkConfig<IntraHelper>,
         clients: HashMap<ShardIndex, ShardHelperClient>,
         handler: Option<HandlerRef<ShardIndex>>,
-    ) -> (Self, MpcHelperServer) {
+    ) -> (Self, MpcHelperServer<IntraHelper>) {
         let transport = Self::new_internal(identity, clients, handler);
         let server = MpcHelperServer::new(transport.clone(), server_config, network_config);
         (transport, server)
@@ -379,19 +379,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{NetworkConfig, ServerConfig},
-        ff::{FieldType, Fp31, Serializable},
-        helpers::{
+        config::{NetworkConfig, ServerConfig}, ff::{FieldType, Fp31, Serializable}, helpers::{
             make_owned_handler,
             query::{QueryInput, QueryType::TestMultiply},
-        },
-        net::{
+        }, net::{
             client::{ClientIdentity, ShardHelperClient},
             test::{get_test_identity, TestConfig, TestConfigBuilder, TestServer},
-        },
-        secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares},
-        test_fixture::Reconstruct,
-        AppConfig, AppSetup, HelperApp,
+        }, secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares}, sharding::IntraHelper, test_fixture::Reconstruct, AppConfig, AppSetup, HelperApp
     };
 
     static STEP: Lazy<Gate> = Lazy::new(|| Gate::from("http-transport"));
@@ -477,8 +471,8 @@ mod tests {
     async fn make_helpers(
         sockets: [TcpListener; 3],
         server_config: [ServerConfig; 3],
-        ring_config: &NetworkConfig,
-        shards_config: &ShardsConfig,
+        ring_config: &NetworkConfig<HelpersRing>,
+        shards_config: &NetworkConfig<IntraHelper>,
         shards_server_config: Vec<ServerConfig>,
         disable_https: bool,
     ) -> [HelperApp; 3] {
