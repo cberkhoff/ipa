@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs,
     io::BufReader,
     net::TcpListener,
@@ -18,7 +17,7 @@ use ipa_core::{
     config::{hpke_registry, HpkeServerConfig, NetworkConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
-    net::{ClientIdentity, MpcHelperClient, MpcHttpTransport, ShardHttpTransport},
+    net::{ClientIdentity, MpcHelperClient, ShardHelperClient, MpcHttpTransport, ShardHttpTransport},
     sharding::ShardIndex,
     AppConfig, AppSetup,
 };
@@ -147,7 +146,7 @@ fn read_file(path: &Path) -> Result<BufReader<fs::File>, BoxError> {
 }
 
 async fn server(args: ServerArgs) -> Result<(), BoxError> {
-    let mpc_identity = HelperIdentity::try_from(args.identity.expect("enforced by clap")).unwrap();
+    let my_identity = HelperIdentity::try_from(args.identity.expect("enforced by clap")).unwrap();
     let shard_index = ShardIndex(args.index);
 
     let (mpc_identity, mpc_server_tls) = match (args.ring_tls_cert, args.ring_tls_key) {
@@ -162,7 +161,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
                 }),
             )
         }
-        (None, None) => (ClientIdentity::Helper(mpc_identity), None),
+        (None, None) => (ClientIdentity::Helper(my_identity), None),
         _ => panic!("should have been rejected by clap"),
     };
 
@@ -216,19 +215,24 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
     let clients = MpcHelperClient::from_conf(&network_config, &mpc_identity);
 
     let (transport, server) = MpcHttpTransport::new(
-        mpc_identity,
+        my_identity,
         mpc_server_config.clone(),
         network_config.clone(),
         clients,
         Some(mpc_handler),
     );
 
-    let shards_config = ShardsConfig {
-        peers: vec![],
-        client: network_config.client,
-    };
+    let shard_network_config_path = args.shard_network.as_deref().unwrap();
+    let shards_config = NetworkConfig::from_toml_str(&fs::read_to_string(shard_network_config_path)?)?
+        .override_scheme(&scheme);
 
-    let shard_transport = ShardHttpTransport::new(ShardIndex(0u32), shard_server_config,shards_config, HashMap::new(), None);
+    let shard_clients = ShardHelperClient::from_conf(&shards_config, &shard_index);
+    let (shard_transport, _shard_server) = ShardHttpTransport::new(
+        shard_index, 
+        shard_server_config,
+        shards_config, 
+        shard_clients, 
+        Some(shard_handler));
 
     let _app = setup.connect(transport.clone(), shard_transport);
 

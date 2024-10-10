@@ -87,6 +87,7 @@ impl RestrictedNetwork<IntraHelper> {
     }
 }
 
+// If the underlying AddressableServer have socets, then you will want to make this mutable to take the sockets out
 pub struct ShardedConfig {
     pub disable_https: bool,
     pub rings: Vec<RestrictedNetwork<HelpersRing>>,
@@ -326,7 +327,7 @@ pub struct TestServer {
     pub client: MpcHelperClient,
     pub request_handler: Option<Arc<dyn RequestHandler<HelperIdentity>>>,
 }
-
+/// Test for ring interactions
 impl TestServer {
     /// Build default set of test clients
     ///
@@ -396,12 +397,12 @@ impl TestServerBuilder {
         } else {
             get_client_ring_test_identity(HelperIdentity::ONE)
         };
-        let test_config = ShardedConfig::builder()
+        let mut test_config = ShardedConfig::builder()
             .with_disable_https_option(self.disable_https)
             .with_use_http1_option(self.use_http1)
             // TODO: add disble_matchkey here
             .build();
-        let ShardedConfig {
+        /*let ShardedConfig {
             network: network_config,
             servers: [server_config, _, _],
             sockets: Some([server_socket, _, _]),
@@ -409,23 +410,25 @@ impl TestServerBuilder {
         } = test_config
         else {
             panic!("TestConfig should have allocated ports");
-        };
-        let clients = MpcHelperClient::from_conf(&network_config, &identity.clone_with_key());
+        };*/
+        let leaders_ring = test_config.rings.pop().unwrap();
+        let first_server = leaders_ring.servers.configs.into_iter().next().unwrap();
+        let clients = MpcHelperClient::from_conf(&leaders_ring.network, &identity.clone_with_key());
         let handler = self.handler.as_ref().map(HandlerBox::owning_ref);
         let (transport, server) = MpcHttpTransport::new(
             HelperIdentity::ONE,
-            server_config,
-            network_config.clone(),
+            first_server.config,
+            leaders_ring.network.clone(),
             clients,
             handler,
         );
-        let (addr, handle) = server.start_on(Some(server_socket), self.metrics).await;
+        let (addr, handle) = server.start_on(first_server.socket, self.metrics).await;
         // Get the config for HelperIdentity::ONE
-        let h1_peer_config = network_config.peers().into_iter().next().unwrap();
+        let h1_peer_config = leaders_ring.network.peers().into_iter().next().unwrap();
         // At some point it might be appropriate to return two clients here -- the first being
         // another helper and the second being a report collector. For now we use the same client
         // for both types of calls.
-        let client = MpcHelperClient::new(&network_config.client, h1_peer_config, identity);
+        let client = MpcHelperClient::new(&leaders_ring.network.client, h1_peer_config, identity);
         TestServer {
             addr,
             handle,
@@ -443,7 +446,8 @@ fn get_test_certificate_and_key(id: usize) -> (&'static [u8], &'static [u8]) {
 
 #[must_use]
 pub fn get_client_ring_test_identity(id: HelperIdentity) -> ClientIdentity {
-    let (mut certificate, mut private_key) = get_test_certificate_and_key(id.into() - 1);
+    let zero_based_ix: usize = usize::try_from(id).unwrap() - 1;
+    let (mut certificate, mut private_key) = get_test_certificate_and_key(zero_based_ix);
     ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap()
 }
 
