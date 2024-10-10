@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use curve25519_dalek::traits::Identity;
 use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
@@ -17,35 +18,33 @@ use crate::{
         routing::{Addr, RouteId},
         ApiError, BodyStream, HandlerRef, HelperIdentity, HelperResponse, NoQueryId,
         NoResourceIdentifier, NoStep, QueryIdBinding, ReceiveRecords, RequestHandler, RouteParams,
-        StepBinding, StreamCollection, Transport, TransportIdentity,
+        StepBinding, StreamCollection, Transport,
     },
     net::{client::MpcHelperClient, error::Error, MpcHelperServer},
     protocol::{Gate, QueryId},
-    sharding::{HelpersRing, IntraHelper, ShardIndex},
+    sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
     sync::Arc,
 };
 
-use super::client::{HelperClient, ShardHelperClient};
-
 /// Shared implementation used by [`MpcHttpTransport`] and [`ShardHttpTransport`]
-pub struct HttpTransport<I: TransportIdentity> {
-    identity: I,
-    clients: HashMap<I, HelperClient>,
-    record_streams: StreamCollection<I, BodyStream>,
-    handler: Option<HandlerRef<I>>,
+pub struct HttpTransport<R: TransportRestriction> {
+    identity: R::Identity,
+    clients: HashMap<R::Identity, MpcHelperClient<R>>,
+    record_streams: StreamCollection<R::Identity, BodyStream>,
+    handler: Option<HandlerRef<R::Identity>>,
 }
 
 /// HTTP transport for helper to helper traffic.
 #[derive(Clone)]
 pub struct MpcHttpTransport {
-    inner_transport: Arc<HttpTransport<HelperIdentity>>,
+    inner_transport: Arc<HttpTransport<HelpersRing>>,
 }
 
 /// A stub for HTTP transport implementation, suitable for serving inter-shard traffic
 #[derive(Clone)]
 pub struct ShardHttpTransport {
     #[allow(dead_code)]
-    inner_transport: Arc<HttpTransport<ShardIndex>>,
+    inner_transport: Arc<HttpTransport<IntraHelper>>,
 }
 
 impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
@@ -68,7 +67,7 @@ impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
     }
 }
 
-impl<I: TransportIdentity> HttpTransport<I> {
+impl<TR: TransportRestriction> HttpTransport<TR> {
     async fn send<
         D: Stream<Item = Vec<u8>> + Send + 'static,
         Q: QueryIdBinding,
@@ -76,7 +75,7 @@ impl<I: TransportIdentity> HttpTransport<I> {
         R: RouteParams<RouteId, Q, S>,
     >(
         &self,
-        dest: I,
+        dest: TR::Identity,
         route: R,
         data: D,
     ) -> Result<(), Error>
@@ -97,7 +96,7 @@ impl<I: TransportIdentity> HttpTransport<I> {
                 // so this can just poll this future.
                 resp_future
                     .map_err(Into::into)
-                    .and_then(HelperClient::resp_ok)
+                    .and_then(MpcHelperClient::<TR>::resp_ok)
                     .await?;
                 Ok(())
             }
@@ -119,9 +118,9 @@ impl<I: TransportIdentity> HttpTransport<I> {
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
         &self,
-        from: I,
+        from: TR::Identity,
         route: &R,
-    ) -> ReceiveRecords<I, BodyStream> {
+    ) -> ReceiveRecords<TR::Identity, BodyStream> {
         ReceiveRecords::new(
             (route.query_id(), from, route.gate()),
             self.record_streams.clone(),
@@ -149,13 +148,13 @@ impl<I: TransportIdentity> HttpTransport<I> {
         /// This implementation is a poor man's safety net and only works because we run
         /// one query at a time and don't use query identifiers.
         #[pin_project(PinnedDrop)]
-        struct ClearOnDrop<I: TransportIdentity, F: Future> {
-            transport: Arc<HttpTransport<I>>,
+        struct ClearOnDrop<TR: TransportRestriction, F: Future> {
+            transport: Arc<HttpTransport<TR>>,
             #[pin]
             inner: F,
         }
 
-        impl<I: TransportIdentity, F: Future> Future for ClearOnDrop<I, F> {
+        impl<TR: TransportRestriction, F: Future> Future for ClearOnDrop<TR, F> {
             type Output = F::Output;
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -164,7 +163,7 @@ impl<I: TransportIdentity> HttpTransport<I> {
         }
 
         #[pinned_drop]
-        impl<I: TransportIdentity, F: Future> PinnedDrop for ClearOnDrop<I, F> {
+        impl<TR: TransportRestriction, F: Future> PinnedDrop for ClearOnDrop<TR, F> {
             fn drop(self: Pin<&mut Self>) {
                 self.transport.record_streams.clear();
             }
@@ -210,9 +209,9 @@ impl MpcHttpTransport {
     ) -> Self {
         let mut id_clients = HashMap::new();
         let [c1, c2, c3] = clients;
-        id_clients.insert(HelperIdentity::ONE, c1.client);
-        id_clients.insert(HelperIdentity::TWO, c2.client);
-        id_clients.insert(HelperIdentity::THREE, c3.client);
+        id_clients.insert(HelperIdentity::ONE, c1);
+        id_clients.insert(HelperIdentity::TWO, c2);
+        id_clients.insert(HelperIdentity::THREE, c3);
         Self {
             inner_transport: Arc::new(HttpTransport {
                 identity,
@@ -300,7 +299,7 @@ impl ShardHttpTransport {
         identity: ShardIndex,
         server_config: ServerConfig,
         network_config: NetworkConfig<IntraHelper>,
-        clients: HashMap<ShardIndex, ShardHelperClient>,
+        clients: HashMap<ShardIndex, MpcHelperClient<IntraHelper>>,
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> (Self, MpcHelperServer<IntraHelper>) {
         let transport = Self::new_internal(identity, clients, handler);
@@ -310,12 +309,12 @@ impl ShardHttpTransport {
 
     fn new_internal(
         identity: ShardIndex,
-        clients: HashMap<ShardIndex, ShardHelperClient>,
+        clients: HashMap<ShardIndex, MpcHelperClient<IntraHelper>>,
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> Self {
         let mut base_clients = HashMap::new();
         for (ix, client) in clients {
-            base_clients.insert(ix, client.client);
+            base_clients.insert(ix, client);
         }
         Self {
             inner_transport: Arc::new(HttpTransport {
@@ -383,8 +382,8 @@ mod tests {
             make_owned_handler,
             query::{QueryInput, QueryType::TestMultiply},
         }, net::{
-            client::{ClientIdentity, ShardHelperClient},
-            test::{get_client_ring_test_identity, ShardedConfig, TestConfigBuilder, TestServer},
+            client::ClientIdentity,
+            test::{create_ids, ShardedConfig, TestConfigBuilder, TestServer},
         }, secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares}, test_fixture::Reconstruct, AppConfig, AppSetup, HelperApp
     };
 
@@ -466,16 +465,12 @@ mod tests {
         let leaders_ring = conf.rings.pop().unwrap();
         join_all(zip(HelperIdentity::make_three(),leaders_ring.servers.configs).map(
             |(id, mut addr_server)| {
-                //leaders_ring().servers.iter()
                 let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
-                
+                let shard_ix = ShardIndex::FIRST;
+                let identities = create_ids(conf.disable_https, id, shard_ix);
+
                 // Ring config
-                let client_id = if conf.disable_https {
-                    ClientIdentity::Helper(id)
-                } else {
-                    get_client_ring_test_identity(id.into())
-                };
-                let clients = MpcHelperClient::from_conf(&leaders_ring.network, &client_id);
+                let clients = MpcHelperClient::from_conf(&leaders_ring.network, &identities.helper);
                 let (transport, server) = MpcHttpTransport::new(
                     id,
                     addr_server.config.clone(),
@@ -485,17 +480,10 @@ mod tests {
                 );
 
                 // Shard Config
-                let shard_ix = ShardIndex::FIRST;
-                let shard_client_id = if conf.disable_https {
-                    ClientIdentity::Shard(shard_ix)
-                } else {
-                    // Using same certificate to identify
-                    get_client_ring_test_identity(id.into())
-                };
                 let helper_shards = conf.get_shards_for_helper(id);
                 let addr_shard = helper_shards.get_first_shard();
                 let shard_network_config = helper_shards.network.clone();
-                let shard_clients = ShardHelperClient::from_conf(&shard_network_config, &shard_client_id);
+                let shard_clients = MpcHelperClient::<IntraHelper>::shards_from_conf(&shard_network_config, &identities.shard);
                 let (shard_transport, shard_server) =
                     ShardHttpTransport::new(
                         shard_ix,

@@ -51,7 +51,7 @@ impl Display for ShardIndex {
     }
 }
 
-#[cfg(feature = "web-app")]
+//#[cfg(feature = "web-app")]
 impl From<ShardIndex> for hyper::header::HeaderValue {
     fn from(ix: ShardIndex) -> Self {
         // panic if serializing an integer fails, or is not ASCII

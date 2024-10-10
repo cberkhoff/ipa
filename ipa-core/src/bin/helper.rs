@@ -17,8 +17,8 @@ use ipa_core::{
     config::{hpke_registry, HpkeServerConfig, NetworkConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
-    net::{ClientIdentity, MpcHelperClient, ShardHelperClient, MpcHttpTransport, ShardHttpTransport},
-    sharding::ShardIndex,
+    net::{ClientIdentity, MpcHelperClient, MpcHttpTransport, ShardHttpTransport},
+    sharding::{IntraHelper, ShardIndex},
     AppConfig, AppSetup,
 };
 use tracing::{error, info};
@@ -161,7 +161,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
                 }),
             )
         }
-        (None, None) => (ClientIdentity::Helper(my_identity), None),
+        (None, None) => (ClientIdentity::Header(my_identity), None),
         _ => panic!("should have been rejected by clap"),
     };
 
@@ -177,7 +177,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
                 }),
             )
         }
-        (None, None) => (ClientIdentity::Shard(shard_index), None),
+        (None, None) => (ClientIdentity::Header(shard_index), None),
         _ => panic!("should have been rejected by clap"),
     };
 
@@ -194,7 +194,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
         port: args.ring_port,
         disable_https: args.disable_https,
         tls: mpc_server_tls,
-        hpke_config: mk_encryption,
+        hpke_config: mk_encryption.clone(),
     };
 
     let shard_server_config = ServerConfig {
@@ -226,7 +226,7 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
     let shards_config = NetworkConfig::from_toml_str(&fs::read_to_string(shard_network_config_path)?)?
         .override_scheme(&scheme);
 
-    let shard_clients = ShardHelperClient::from_conf(&shards_config, &shard_index);
+    let shard_clients = MpcHelperClient::<IntraHelper>::shards_from_conf(&shards_config, &shard_identity);
     let (shard_transport, _shard_server) = ShardHttpTransport::new(
         shard_index, 
         shard_server_config,

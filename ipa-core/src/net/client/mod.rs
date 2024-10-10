@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, future::Future, io::{self, BufRead}, pin::Pin, sync::Arc, task::{ready, Context, Poll}
+    collections::HashMap, future::Future, io::{self, BufRead}, marker::PhantomData, pin::Pin, sync::Arc, task::{ready, Context, Poll}
 };
 
 use axum::{
@@ -24,24 +24,18 @@ use crate::{
         ClientConfig, HyperClientConfigurator, NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig,
     },
     helpers::{
-        query::{PrepareQuery, QueryConfig, QueryInput},
-        HelperIdentity,
+        query::{PrepareQuery, QueryConfig, QueryInput}, HelperIdentity, TransportIdentity
     },
-    net::{http_serde, HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER, Error, CRYPTO_PROVIDER},
-    protocol::{Gate, QueryId}, sharding::{HelpersRing, IntraHelper, ShardIndex},
+    net::{http_serde, Error, CRYPTO_PROVIDER, HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER},
+    protocol::{Gate, QueryId}, sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
 };
 
 #[derive(Default)]
-pub enum ClientIdentity {
+pub enum ClientIdentity<R: TransportRestriction> {
     /// Claim the specified helper identity without any additional authentication.
     ///
     /// This is only supported for HTTP clients.
-    Helper(HelperIdentity),
-
-    /// Claim the specified shard identity without any additional authentication.
-    ///
-    /// This is only supported for HTTP clients.
-    Shard(ShardIndex),
+    Header(R::Identity),
 
     /// Authenticate with an X.509 certificate or a certificate chain.
     ///
@@ -53,7 +47,21 @@ pub enum ClientIdentity {
     None,
 }
 
-impl ClientIdentity {
+pub struct ClientIdentities {
+    pub helper: ClientIdentity<HelpersRing>,
+    pub shard: ClientIdentity<IntraHelper>,
+}
+
+impl ClientIdentities {
+    pub fn new_headers(id: HelperIdentity, ix: ShardIndex) -> Self {
+        Self {
+            helper: ClientIdentity::Header(id),
+            shard: ClientIdentity::Header(ix),
+        }
+    }
+}
+
+impl<R: TransportRestriction> ClientIdentity<R> {
     /// Authenticates clients with an X.509 certificate using the provided certificate and private
     /// key. Certificate must be in PEM format, private key encoding must be [`PKCS8`].
     ///
@@ -78,11 +86,10 @@ impl ClientIdentity {
     /// to own a private key, and we need to create 3 with the same config, we provide Clone
     /// capabilities via this method to `ClientIdentity`.
     #[must_use]
-    pub fn clone_with_key(&self) -> ClientIdentity {
+    pub fn clone_with_key(&self) -> ClientIdentity<R> {
         match self {
             Self::Certificate((c, pk)) => Self::Certificate((c.clone(), pk.clone_key())),
-            Self::Helper(h) => Self::Helper(*h),
-            Self::Shard(h) => Self::Shard(*h),
+            Self::Header(h) => Self::Header(*h),
             Self::None => Self::None,
         }
     }
@@ -150,14 +157,15 @@ impl<'a> Future for ResponseFuture<'a> {
 /// TODO: It probably isn't necessary to always use `[MpcHelperClient; 3]`. Instead, a single
 ///       client can be configured to talk to all three helpers.
 #[derive(Debug, Clone)]
-pub struct HelperClient {
+pub struct MpcHelperClient<R: TransportRestriction = HelpersRing> {
     client: Client<HttpsConnector<HttpConnector>, Body>,
     scheme: uri::Scheme,
     authority: uri::Authority,
     auth_header: Option<(HeaderName, HeaderValue)>,
+    _restriction: PhantomData<R>,
 }
 
-impl HelperClient {
+impl<R: TransportRestriction> MpcHelperClient<R> {
 
     /// Create a new client with the given configuration
     ///
@@ -170,7 +178,8 @@ impl HelperClient {
     pub fn new(
         client_config: &ClientConfig,
         peer_config: PeerConfig,
-        identity: ClientIdentity,
+        identity: ClientIdentity<R>,
+        header_name: &'static HeaderName,
     ) -> Self {
         let (connector, auth_header) = if peer_config.url.scheme() == Some(&Scheme::HTTP) {
             // This connector works for both http and https. A regular HttpConnector would suffice,
@@ -180,8 +189,9 @@ impl HelperClient {
                     error!("certificate identity ignored for HTTP client");
                     None
                 }
-                ClientIdentity::Helper(id) => Some((HTTP_CLIENT_ID_HEADER.clone(), id.into())),
-                ClientIdentity::Shard(ix) => Some((HTTP_SHARD_INDEX_HEADER.clone(), ix.into())),
+                ClientIdentity::Header(id) => {
+                    Some((header_name.clone(), HeaderValue::from_str(id.as_str().as_ref()).unwrap() ))
+                }
                 ClientIdentity::None => None,
             };
             (
@@ -211,12 +221,8 @@ impl HelperClient {
                     ClientIdentity::Certificate((cert_chain, pk)) => builder
                         .with_client_auth_cert(cert_chain, pk)
                         .expect("Can setup client authentication with certificate"),
-                    ClientIdentity::Helper(_) => {
+                    ClientIdentity::Header(_) => {
                         error!("header-passed identity ignored for HTTPS client");
-                        builder.with_no_client_auth()
-                    }
-                    ClientIdentity::Shard(_) => {
-                        error!("Shard header-passed identity ignored for HTTPS client");
                         builder.with_no_client_auth()
                     }
                     ClientIdentity::None => builder.with_no_client_auth(),
@@ -265,6 +271,7 @@ impl HelperClient {
             scheme,
             authority,
             auth_header,
+            _restriction: PhantomData,
         }
     }
 
@@ -358,22 +365,7 @@ impl HelperClient {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ShardHelperClient {
-    pub client: HelperClient,
-}
-
-impl ShardHelperClient {
-    pub fn new(
-        client_config: &ClientConfig,
-        peer_config: PeerConfig,
-        identity: ClientIdentity,
-    ) -> Self {
-        Self {
-            client: HelperClient::new(client_config, peer_config, identity)
-        }
-    }
-
+impl MpcHelperClient<IntraHelper> {
     /// Create a set of clients for the MPC helpers in the supplied helper network configuration.
     ///
     /// This function returns a set of three clients, which may be used to talk to each of the
@@ -384,33 +376,20 @@ impl ShardHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &NetworkConfig<IntraHelper>, identity: &ClientIdentity) -> HashMap<ShardIndex, Self> {
+    pub fn shards_from_conf(conf: &NetworkConfig<IntraHelper>, identity: &ClientIdentity<IntraHelper>) -> HashMap<ShardIndex, Self> {
         conf.enumerate_peers()
             .into_iter()
-            .map(|(ix, peer_conf)| (ix, ShardHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key())))
+            .map(|(ix, peer_conf)| (ix, Self::new(
+                &conf.client, 
+                peer_conf.clone(), 
+                identity.clone_with_key(),
+                &HTTP_SHARD_INDEX_HEADER)))
             .collect()
     }
 
-    pub async fn echo(&self, s: &str) -> Result<String, Error> {
-        self.client.echo(s).await
-    }
 }
 
-#[derive(Debug, Clone)]
-pub struct MpcHelperClient {
-    pub client: HelperClient,
-}
-
-impl MpcHelperClient {
-    pub fn new(
-        client_config: &ClientConfig,
-        peer_config: PeerConfig,
-        identity: ClientIdentity,
-    ) -> Self {
-        Self {
-            client: HelperClient::new(client_config, peer_config, identity)
-        }
-    }
+impl MpcHelperClient<HelpersRing> {
 
     /// Create a set of clients for the MPC helpers in the supplied helper network configuration.
     ///
@@ -422,14 +401,14 @@ impl MpcHelperClient {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &NetworkConfig<HelpersRing>, identity: &ClientIdentity) -> [Self; 3] {
+    pub fn from_conf(conf: &NetworkConfig<HelpersRing>, identity: &ClientIdentity<HelpersRing>) -> [Self; 3] {
         conf.peers()
             .each_ref()
-            .map(|peer_conf| MpcHelperClient::new(&conf.client, peer_conf.clone(), identity.clone_with_key()))
-    }
-
-    pub async fn echo(&self, s: &str) -> Result<String, Error> {
-        self.client.echo(s).await
+            .map(|peer_conf| Self::new(
+                &conf.client, 
+                peer_conf.clone(), 
+                identity.clone_with_key(),
+                &HTTP_CLIENT_ID_HEADER))
     }
 
     /// Intended to be called externally, by the report collector. Informs the MPC ring that
@@ -438,10 +417,10 @@ impl MpcHelperClient {
     /// If the request has illegal arguments, or fails to deliver to helper
     pub async fn create_query(&self, data: QueryConfig) -> Result<QueryId, Error> {
         let req = http_serde::query::create::Request::new(data);
-        let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
-        let resp = self.client.request(req).await?;
+        let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
+        let resp = self.request(req).await?;
         if resp.status().is_success() {
-            let bytes = HelperClient::response_to_bytes(resp).await?;
+            let bytes = Self::response_to_bytes(resp).await?;
             let http_serde::query::create::ResponseBody { query_id } =
                 serde_json::from_slice(&bytes)?;
             Ok(query_id)
@@ -457,9 +436,9 @@ impl MpcHelperClient {
     /// If the request has illegal arguments, or fails to deliver to helper
     pub async fn query_input(&self, data: QueryInput) -> Result<(), Error> {
         let req = http_serde::query::input::Request::new(data);
-        let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
-        let resp = self.client.request(req).await?;
-        HelperClient::resp_ok(resp).await
+        let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
+        let resp = self.request(req).await?;
+        Self::resp_ok(resp).await
     }
 
     /// Retrieve the status of a query.
@@ -472,11 +451,11 @@ impl MpcHelperClient {
         query_id: QueryId,
     ) -> Result<crate::query::QueryStatus, Error> {
         let req = http_serde::query::status::Request::new(query_id);
-        let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
+        let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
 
-        let resp = self.client.request(req).await?;
+        let resp = self.request(req).await?;
         if resp.status().is_success() {
-            let bytes = HelperClient::response_to_bytes(resp).await?;
+            let bytes = Self::response_to_bytes(resp).await?;
             let http_serde::query::status::ResponseBody { status } =
                 serde_json::from_slice(&bytes)?;
             Ok(status)
@@ -493,8 +472,8 @@ impl MpcHelperClient {
     #[cfg(any(all(test, not(feature = "shuttle")), feature = "cli"))]
     pub async fn query_results(&self, query_id: QueryId) -> Result<bytes::Bytes, Error> {
         let req = http_serde::query::results::Request::new(query_id);
-        let req = req.try_into_http_request(self.client.scheme.clone(), self.client.authority.clone())?;
-        let resp = self.client.request(req).await?;
+        let req = req.try_into_http_request(self.scheme.clone(), self.authority.clone())?;
+        let resp = self.request(req).await?;
         if resp.status().is_success() {
             let body = resp.into_body().collect().await?.to_bytes();
             Ok(body)
@@ -503,18 +482,6 @@ impl MpcHelperClient {
         }
     }
 
-    pub fn step<S: Stream<Item = Vec<u8>> + Send + 'static>(
-        &self,
-        query_id: QueryId,
-        gate: &Gate,
-        data: S,
-    ) -> Result<ResponseFuture, Error> {
-        self.client.step(query_id, gate, data)
-    }
-
-    pub async fn prepare_query(&self, data: PrepareQuery) -> Result<(), Error> {
-        self.client.prepare_query(data).await
-    }
 }
 
 fn make_http_connector() -> HttpConnector {
@@ -542,8 +509,7 @@ pub(crate) mod tests {
     use crate::{
         ff::{FieldType, Fp31},
         helpers::{
-            make_owned_handler, query::QueryType::TestMultiply, BytesStream, HelperResponse,
-            RequestHandler, RoleAssignment, Transport, MESSAGE_PAYLOAD_SIZE_BYTES,
+            make_owned_handler, query::QueryType::TestMultiply, BytesStream, HelperIdentity, HelperResponse, RequestHandler, RoleAssignment, Transport, MESSAGE_PAYLOAD_SIZE_BYTES
         },
         net::test::TestServer,
         protocol::step::TestExecutionStep,
@@ -566,7 +532,7 @@ pub(crate) mod tests {
             hpke_config: None,
         };
         let client =
-            MpcHelperClient::new(&ClientConfig::default(), peer_config, ClientIdentity::None);
+            MpcHelperClient::new(&ClientConfig::default(), peer_config, ClientIdentity::<HelpersRing>::None, &HTTP_CLIENT_ID_HEADER);
 
         // The server's self-signed test cert is not in the system truststore, and we didn't supply
         // it in the client config, so the connection should fail with a certificate error.
@@ -733,7 +699,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        HelperClient::resp_ok(resp).await.unwrap();
+        MpcHelperClient::<IntraHelper>::resp_ok(resp).await.unwrap();
 
         let mut stream = transport
             .receive(HelperIdentity::ONE, (QueryId, expected_step.clone()))

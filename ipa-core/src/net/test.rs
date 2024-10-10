@@ -19,8 +19,10 @@ use tokio::task::JoinHandle;
 use crate::{
     config::{
         ClientConfig, HpkeClientConfig, HpkeServerConfig, NetworkConfig, PeerConfig, ServerConfig, TlsConfig
-    }, helpers::{repeat_n, HandlerBox, HelperIdentity, RequestHandler}, hpke::{Deserializable as _, IpaPublicKey}, net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport}, secret_sharing, sharding::{HelpersRing, IntraHelper, TransportRestriction}, sync::Arc, test_fixture::metrics::MetricsHandle
+    }, helpers::{repeat_n, HandlerBox, HelperIdentity, RequestHandler}, hpke::{Deserializable as _, IpaPublicKey}, net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport}, sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction}, sync::Arc, test_fixture::metrics::MetricsHandle
 };
+
+use super::client::ClientIdentities;
 
 pub struct Ports<C> {
     ring: C,
@@ -392,29 +394,17 @@ impl TestServerBuilder {
     }
 
     pub async fn build(self) -> TestServer {
-        let identity = if self.disable_https {
-            ClientIdentity::Helper(HelperIdentity::ONE)
-        } else {
-            get_client_ring_test_identity(HelperIdentity::ONE)
-        };
+        let identities = create_ids(self.disable_https, HelperIdentity::ONE, ShardIndex::FIRST);
         let mut test_config = ShardedConfig::builder()
             .with_disable_https_option(self.disable_https)
             .with_use_http1_option(self.use_http1)
             // TODO: add disble_matchkey here
             .build();
-        /*let ShardedConfig {
-            network: network_config,
-            servers: [server_config, _, _],
-            sockets: Some([server_socket, _, _]),
-            ..
-        } = test_config
-        else {
-            panic!("TestConfig should have allocated ports");
-        };*/
         let leaders_ring = test_config.rings.pop().unwrap();
         let first_server = leaders_ring.servers.configs.into_iter().next().unwrap();
-        let clients = MpcHelperClient::from_conf(&leaders_ring.network, &identity.clone_with_key());
+        let clients = MpcHelperClient::from_conf(&leaders_ring.network, &identities.helper.clone_with_key());
         let handler = self.handler.as_ref().map(HandlerBox::owning_ref);
+        let client = clients[0].clone();
         let (transport, server) = MpcHttpTransport::new(
             HelperIdentity::ONE,
             first_server.config,
@@ -424,11 +414,11 @@ impl TestServerBuilder {
         );
         let (addr, handle) = server.start_on(first_server.socket, self.metrics).await;
         // Get the config for HelperIdentity::ONE
-        let h1_peer_config = leaders_ring.network.peers().into_iter().next().unwrap();
+        //let h1_peer_config = leaders_ring.network.peers().into_iter().next().unwrap();
         // At some point it might be appropriate to return two clients here -- the first being
         // another helper and the second being a report collector. For now we use the same client
         // for both types of calls.
-        let client = MpcHelperClient::new(&leaders_ring.network.client, h1_peer_config, identity);
+        //let client = MpcHelperClient::new(&leaders_ring.network.client, h1_peer_config, identity);
         TestServer {
             addr,
             handle,
@@ -440,16 +430,29 @@ impl TestServerBuilder {
     }
 }
 
+pub fn create_ids(disable_https: bool, id: HelperIdentity, ix: ShardIndex) -> ClientIdentities {
+    if disable_https {
+        ClientIdentities::new_headers(id, ix)
+    } else {
+        get_client_test_identity(id, ix)
+    }
+}
+
 fn get_test_certificate_and_key(id: usize) -> (&'static [u8], &'static [u8]) {
     (TEST_CERTS[id], TEST_KEYS[id])
 }
 
 #[must_use]
-pub fn get_client_ring_test_identity(id: HelperIdentity) -> ClientIdentity {
-    let zero_based_ix: usize = usize::try_from(id).unwrap() - 1;
-    let (mut certificate, mut private_key) = get_test_certificate_and_key(zero_based_ix);
-    ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap()
+pub fn get_client_test_identity(id: HelperIdentity, ix: ShardIndex) -> ClientIdentities {
+    let col: usize = usize::try_from(id).unwrap() - 1;
+    let row: usize = usize::try_from(ix).unwrap();
+    let (mut certificate, mut private_key) = get_test_certificate_and_key(row * 3 + col);
+    ClientIdentities {
+        helper: ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap(),
+        shard: ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap(),
+    }
 }
+
 
 pub const TEST_CERTS: [&[u8]; 6] = [
     b"\

@@ -18,7 +18,7 @@ mod server;
 pub mod test;
 mod transport;
 
-pub use client::{ClientIdentity, MpcHelperClient, ShardHelperClient};
+pub use client::{ClientIdentity, MpcHelperClient};
 pub use error::Error;
 pub use server::{MpcHelperServer, TracingSpanMaker};
 pub use transport::{MpcHttpTransport, ShardHttpTransport};
