@@ -198,7 +198,7 @@ pub async fn make_clients(
     let network = if let Some(path) = network_path {
         NetworkConfig::from_toml_str(&fs::read_to_string(path).unwrap()).unwrap()
     } else {
-        NetworkConfig::<HelpersRing>::new(
+        NetworkConfig::<HelpersRing>::new_ring(
             [
                 PeerConfig::new("localhost:3000".parse().unwrap(), None),
                 PeerConfig::new("localhost:3001".parse().unwrap(), None),

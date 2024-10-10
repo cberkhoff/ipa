@@ -45,6 +45,8 @@ use crate::{
     }, sharding::{HelpersRing, IntraHelper, TransportRestriction}, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
 };
 
+use super::ShardHttpTransport;
+
 pub trait TracingSpanMaker: Send + Sync + Clone + 'static {
     fn make_span(&self) -> Span;
 }
@@ -76,7 +78,7 @@ pub struct MpcHelperServer<R: TransportRestriction> {
 }
 
 impl MpcHelperServer<HelpersRing> {
-    pub fn new(
+    pub fn new_ring(
         transport: MpcHttpTransport,
         config: ServerConfig,
         network_config: NetworkConfig<HelpersRing>,
@@ -85,25 +87,25 @@ impl MpcHelperServer<HelpersRing> {
             config,
             network_config,
             router: handlers::router(transport.clone()),
-            id_header_layer: ClientIdentityFromHeaderLayer::new(),
+            id_header_layer: ClientIdentityFromHeaderLayer::new_ring(),
         }
     }
 }
 
-/*impl MpcHelperServer<IntraHelper> {
-    pub fn new(
-        transport: MpcHttpTransport,
+impl MpcHelperServer<IntraHelper> {
+    pub fn new_shards(
+        _transport: ShardHttpTransport,
         config: ServerConfig,
         network_config: NetworkConfig<IntraHelper>,
     ) -> Self {
         MpcHelperServer {
             config,
             network_config,
-            router: super::http_serde::echo::router(),
-            id_header_name: HeaderName::from_static("x-unverified-shard-index"),
+            router: Router::new(),
+            id_header_layer: ClientIdentityFromHeaderLayer::new_shards(),
         }
     }
-}*/
+}
 
 impl<R: TransportRestriction> MpcHelperServer<R> {
 
@@ -425,10 +427,19 @@ struct ClientIdentityFromHeaderLayer<R: TransportRestriction>{
 }
 
 impl ClientIdentityFromHeaderLayer<HelpersRing> {
-    fn new() -> Self {
+    fn new_ring() -> Self {
         Self {
             restriction: PhantomData,
             header_name: &super::HTTP_CLIENT_ID_HEADER,
+        }
+    }
+}
+
+impl ClientIdentityFromHeaderLayer<IntraHelper> {
+    fn new_shards() -> Self {
+        Self {
+            restriction: PhantomData,
+            header_name: &super::HTTP_SHARD_INDEX_HEADER,
         }
     }
 }

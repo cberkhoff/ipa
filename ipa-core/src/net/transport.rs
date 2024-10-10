@@ -199,7 +199,7 @@ impl MpcHttpTransport {
         handler: Option<HandlerRef<HelperIdentity>>,
     ) -> (Self, MpcHelperServer<HelpersRing>) {
         let transport = Self::new_internal(identity, clients, handler);
-        let server = MpcHelperServer::new(transport.clone(), server_config, network_config);
+        let server = MpcHelperServer::new_ring(transport.clone(), server_config, network_config);
         (transport, server)
     }
 
@@ -304,7 +304,7 @@ impl ShardHttpTransport {
         handler: Option<HandlerRef<ShardIndex>>,
     ) -> (Self, MpcHelperServer<IntraHelper>) {
         let transport = Self::new_internal(identity, clients, handler);
-        let server = MpcHelperServer::new(transport.clone(), server_config, network_config);
+        let server = MpcHelperServer::new_shards(transport.clone(), server_config, network_config);
         (transport, server)
     }
 
@@ -366,7 +366,7 @@ impl Transport for ShardHttpTransport {
 
 #[cfg(all(test, web_test, descriptive_gate))]
 mod tests {
-    use std::{iter::zip, net::TcpListener, task::Poll};
+    use std::{iter::zip, task::Poll};
 
     use bytes::Bytes;
     use futures::stream::{poll_immediate, StreamExt};
@@ -379,13 +379,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{NetworkConfig, ServerConfig}, ff::{FieldType, Fp31, Serializable}, helpers::{
+        ff::{FieldType, Fp31, Serializable}, helpers::{
             make_owned_handler,
             query::{QueryInput, QueryType::TestMultiply},
         }, net::{
             client::{ClientIdentity, ShardHelperClient},
-            test::{get_test_identity, TestConfig, TestConfigBuilder, TestServer},
-        }, secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares}, sharding::IntraHelper, test_fixture::Reconstruct, AppConfig, AppSetup, HelperApp
+            test::{get_client_ring_test_identity, ShardedConfig, TestConfigBuilder, TestServer},
+        }, secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares}, test_fixture::Reconstruct, AppConfig, AppSetup, HelperApp
     };
 
     static STEP: Lazy<Gate> = Lazy::new(|| Gate::from("http-transport"));
@@ -460,131 +460,78 @@ mod tests {
     }
 
     // TODO(651): write a test for an error while reading the body (after error handling is finalized)
-
-    struct HelperConfig {
-        id: HelperIdentity,
-        socket: TcpListener,
-        server_config: ServerConfig,
-        shard_server_config: Vec<ServerConfig>,
-    }
-
     async fn make_helpers(
-        sockets: [TcpListener; 3],
-        server_config: [ServerConfig; 3],
-        ring_config: &NetworkConfig<HelpersRing>,
-        shards_config: &NetworkConfig<IntraHelper>,
-        shards_server_config: Vec<ServerConfig>,
-        disable_https: bool,
+        mut conf: ShardedConfig
     ) -> [HelperApp; 3] {
-        join_all(
-            zip(HelperIdentity::make_three(), zip(sockets, zip(server_config, shards_server_config))).map(
-                |(id, (socket, (server_config, shard_server_config)))| async move {
-                    let identity = if disable_https {
-                        ClientIdentity::Helper(id)
-                    } else {
-                        get_test_identity(id)
-                    };
-                    let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
-                    let clients = MpcHelperClient::from_conf(ring_config, &identity);
-                    let (transport, server) = MpcHttpTransport::new(
-                        id,
-                        server_config.clone(),
-                        ring_config.clone(),
-                        clients,
-                        Some(mpc_handler),
-                    );
-                    server.start_on(Some(socket), ()).await;
+        let leaders_ring = conf.rings.pop().unwrap();
+        join_all(zip(HelperIdentity::make_three(),leaders_ring.servers.configs).map(
+            |(id, mut addr_server)| {
+                //leaders_ring().servers.iter()
+                let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
+                
+                // Ring config
+                let client_id = if conf.disable_https {
+                    ClientIdentity::Helper(id)
+                } else {
+                    get_client_ring_test_identity(id.into())
+                };
+                let clients = MpcHelperClient::from_conf(&leaders_ring.network, &client_id);
+                let (transport, server) = MpcHttpTransport::new(
+                    id,
+                    addr_server.config.clone(),
+                    leaders_ring.network.clone(),
+                    clients,
+                    Some(mpc_handler),
+                );
 
-                    let shard_clients = ShardHelperClient::from_conf(shards_config, &identity);
-                    let ix = ShardIndex(0u32);
-                    let shard_transport =
-                        ShardHttpTransport::new(
-                            ix,
-                            shard_server_config,
-                            shards_config.clone(),
-                            shard_clients,
-                            Some(shard_handler));
+                // Shard Config
+                let shard_ix = ShardIndex::FIRST;
+                let shard_client_id = if conf.disable_https {
+                    ClientIdentity::Shard(shard_ix)
+                } else {
+                    // Using same certificate to identify
+                    get_client_ring_test_identity(id.into())
+                };
+                let helper_shards = conf.get_shards_for_helper(id);
+                let addr_shard = helper_shards.get_first_shard();
+                let shard_network_config = helper_shards.network.clone();
+                let shard_clients = ShardHelperClient::from_conf(&shard_network_config, &shard_client_id);
+                let (shard_transport, shard_server) =
+                    ShardHttpTransport::new(
+                        shard_ix,
+                        addr_shard.config.clone(),
+                        shard_network_config,
+                        shard_clients,
+                        Some(shard_handler));
 
+                let helper_shards = conf.get_shards_for_helper_mut(id);
+                let addr_shard = helper_shards.get_first_shard_mut();
+                let ring_socket = addr_server.socket.take();
+                let sharding_socket = addr_shard.socket.take();
+
+                async move {
+                    server.start_on(ring_socket, ()).await;
+                    shard_server.start_on(sharding_socket, ()).await;
                     setup.connect(transport, shard_transport)
-                },
-            ),
-        )
+                }
+        }))
         .await
         .try_into()
         .ok()
         .unwrap()
     }
 
-    async fn make_helpers_shards(
-        sockets: [TcpListener; 3],
-        server_config: [ServerConfig; 3],
-        ring_config: &NetworkConfig,
-        shards_config: &ShardsConfig,
-        shards_server_config: Vec<ServerConfig>,
-        disable_https: bool,
-    ) -> [HelperApp; 3] {
-        join_all(
-            zip(HelperIdentity::make_three(), zip(sockets, server_config)).map(
-                |(id, (socket, server_config))| async move {
-                    let identity = if disable_https {
-                        ClientIdentity::Helper(id)
-                    } else {
-                        get_test_identity(id)
-                    };
-                    let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
-                    let clients = MpcHelperClient::from_conf(ring_config, &identity);
-                    let (transport, server) = MpcHttpTransport::new(
-                        id,
-                        server_config.clone(),
-                        ring_config.clone(),
-                        clients,
-                        Some(mpc_handler),
-                    );
-                    server.start_on(Some(socket), ()).await;
-
-                    let shard_clients = ShardHelperClient::from_conf(shards_config, &identity);
-                    let shard_transport =
-                        ShardHttpTransport::new(
-                            ShardIndex(0u32),
-                            shards_server_config,
-                            shards_config,
-                            shard_clients,
-                            Some(shard_handler));
-
-                    setup.connect(transport, shard_transport)
-                },
-            ),
-        )
-        .await
-        .try_into()
-        .ok()
-        .unwrap()
-    }
-
-    async fn test_three_helpers(mut conf: TestConfig) {
-        let clients = MpcHelperClient::from_conf(&conf.network, &ClientIdentity::None);
-        let _helpers = make_helpers(
-            conf.sockets.take().unwrap(),
-            conf.servers,
-            &conf.network,
-            conf.disable_https,
-        )
-        .await;
-
+    async fn test_three_helpers(conf: ShardedConfig) {
+        let clients = MpcHelperClient::from_conf(&conf.leaders_ring().network, &ClientIdentity::None);
+        let _helpers = make_helpers(conf).await;
         test_multiply(&clients).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn happy_case_twice() {
-        let mut conf = TestConfigBuilder::with_open_ports().build();
-        let clients = MpcHelperClient::from_conf(&conf.network, &ClientIdentity::None);
-        let _helpers = make_helpers(
-            conf.sockets.take().unwrap(),
-            conf.servers,
-            &conf.network,
-            conf.disable_https,
-        )
-        .await;
+        let conf = TestConfigBuilder::with_open_ports().build();
+        let clients = MpcHelperClient::from_conf(&conf.leaders_ring().network, &ClientIdentity::None);
+        let _helpers = make_helpers(conf).await;
 
         test_multiply(&clients).await;
         test_multiply(&clients).await;

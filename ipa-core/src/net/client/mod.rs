@@ -358,6 +358,7 @@ impl HelperClient {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ShardHelperClient {
     pub client: HelperClient,
 }
@@ -395,6 +396,7 @@ impl ShardHelperClient {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct MpcHelperClient {
     pub client: HelperClient,
 }

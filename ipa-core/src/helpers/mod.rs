@@ -132,6 +132,12 @@ impl TryFrom<usize> for HelperIdentity {
     }
 }
 
+impl Into<usize> for HelperIdentity {
+    fn into(self) -> usize {
+        self.id.into()
+    }
+}
+
 impl TryFrom<&str> for HelperIdentity {
     type Error = String;
 

@@ -49,6 +49,14 @@ pub struct NetworkConfig<R: TransportRestriction> {
 }
 
 impl<R: TransportRestriction> NetworkConfig<R> {
+    pub fn new(peers: Vec<PeerConfig>, client: ClientConfig) -> Self {
+        Self {
+            peers,
+            client,
+            restriction: PhantomData,
+        }
+    }
+
     /// Reads config from string. Expects config to be toml format.
     /// To read file, use `fs::read_to_string`
     ///
@@ -119,7 +127,7 @@ impl NetworkConfig<IntraHelper> {
 
 impl NetworkConfig<HelpersRing> {
     
-    pub fn new(ring: [PeerConfig; 3], client: ClientConfig) -> Self {
+    pub fn new_ring(ring: [PeerConfig; 3], client: ClientConfig) -> Self {
         Self { peers: ring.to_vec(), client, restriction: PhantomData }
     }
 

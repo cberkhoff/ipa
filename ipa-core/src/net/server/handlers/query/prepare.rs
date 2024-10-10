@@ -74,7 +74,7 @@ mod tests {
             },
             APPLICATION_JSON,
         },
-        protocol::QueryId,
+        protocol::QueryId, sharding::HelpersRing,
     };
 
     #[tokio::test]
@@ -99,7 +99,7 @@ mod tests {
     // since we tested `QueryType` with `create`, skip it here
     // More lenient version of Request, specifically so to test failure scenarios
     struct OverrideReq {
-        client_id: Option<ClientIdentity>,
+        client_id: Option<ClientIdentity<HelpersRing>>,
         query_id: String,
         field_type: String,
         size: Option<i32>,

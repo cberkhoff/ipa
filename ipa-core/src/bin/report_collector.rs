@@ -18,16 +18,10 @@ use ipa_core::{
             InputSource,
         },
         CsvSerializer, IpaQueryResult, Verbosity,
-    },
-    config::{KeyRegistries, NetworkConfig},
-    ff::{boolean_array::BA32, FieldType},
-    helpers::query::{DpMechanism, IpaQueryConfig, QueryConfig, QuerySize, QueryType},
-    net::MpcHelperClient,
-    report::{EncryptedOprfReportStreams, DEFAULT_KEY_ID},
-    test_fixture::{
+    }, config::{KeyRegistries, NetworkConfig}, ff::{boolean_array::BA32, FieldType}, helpers::query::{DpMechanism, IpaQueryConfig, QueryConfig, QuerySize, QueryType}, net::MpcHelperClient, report::{EncryptedOprfReportStreams, DEFAULT_KEY_ID}, sharding::HelpersRing, test_fixture::{
         ipa::{ipa_in_the_clear, CappingOrder, IpaSecurityModel, TestRawDataRecord},
         EventGenerator, EventGeneratorConfig, HybridEventGenerator, HybridGeneratorConfig,
-    },
+    }
 };
 use rand::{distributions::Alphanumeric, rngs::StdRng, thread_rng, Rng};
 use rand_core::SeedableRng;
@@ -380,7 +374,7 @@ async fn ipa(
 
 async fn ipa_test(
     args: &Args,
-    network: &NetworkConfig,
+    network: &NetworkConfig<HelpersRing>,
     security_model: IpaSecurityModel,
     ipa_query_config: IpaQueryConfig,
     helper_clients: &[MpcHelperClient; 3],

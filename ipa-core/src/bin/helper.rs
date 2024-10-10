@@ -15,7 +15,7 @@ use ipa_core::{
     cli::{
         client_config_setup, keygen, test_setup, ConfGenArgs, KeygenArgs, TestSetupArgs, Verbosity,
     },
-    config::{hpke_registry, HpkeServerConfig, NetworkConfig, ServerConfig, ShardsConfig, TlsConfig},
+    config::{hpke_registry, HpkeServerConfig, NetworkConfig, ServerConfig, TlsConfig},
     error::BoxError,
     helpers::HelperIdentity,
     net::{ClientIdentity, MpcHelperClient, MpcHttpTransport, ShardHttpTransport},
