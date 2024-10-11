@@ -367,7 +367,7 @@ where
 
         Box::pin(async move {
             let (stream, service) = acceptor.accept(stream, service).await.map_err(|err| {
-                error!("[ClientCertRecognizingAcceptor] connection error: {err}");
+                error!("[ClientCertRecognizingAcceptor] Internal acceptor error: {err}");
                 err
             })?;
 
@@ -378,14 +378,13 @@ where
             //    certificate here, because the certificate must have passed full verification at
             //    connection time. But it's possible the certificate subject is not something we
             //    recognize as a helper.
-            let cert = stream
+            let opt_cert = stream
                 .get_ref()
                 .1
                 .peer_certificates()
-                .and_then(<[_]>::first)
-                .expect("Unable to remove certificate from stream");
+                .and_then(<[_]>::first);
             let option_id: Option<<R as TransportRestriction>::Identity> =
-                network_config.identify_cert(cert);
+                network_config.identify_cert(opt_cert);
             let client_id = option_id.map(|id| ClientIdentity(id));
             let service = SetClientIdentityFromCertificate {
                 inner: service,

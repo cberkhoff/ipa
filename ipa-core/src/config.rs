@@ -120,7 +120,8 @@ impl<R: TransportRestriction> NetworkConfig<R> {
     /// We currently require an exact match with the peer cert (i.e. we don't support verifying
     /// the certificate against a truststore and identifying the peer by the certificate
     /// subject). This could be changed if the need arises.
-    pub fn identify_cert(&self, cert: &CertificateDer) -> Option<R::Identity> {
+    pub fn identify_cert(&self, cert: Option<&CertificateDer>) -> Option<R::Identity> {
+        let cert = cert?;
         for (ix, peer) in self.peers.iter().enumerate() {
             if peer.certificate.as_ref() == Some(cert) {
                 return ix.try_into().ok();
