@@ -472,16 +472,6 @@ struct SetClientIdentityFromHeader<S, R: TransportRestriction> {
     restriction: PhantomData<R>,
 }
 
-impl<S, R: TransportRestriction> SetClientIdentityFromHeader<S, R> {
-    fn new(inner: S, header_name: HeaderName) -> Self {
-        Self {
-            inner,
-            header_name,
-            restriction: PhantomData,
-        }
-    }
-}
-
 impl<B, S, R> Service<Request<B>> for SetClientIdentityFromHeader<S, R>
 where
     S: Service<Request<B>, Response = Response>,

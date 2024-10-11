@@ -268,13 +268,11 @@ impl TestConfigBuilder {
         scheme: &str,
         certs: Vec<Option<CertificateDer<'static>>>,
     ) -> RestrictedNetwork<R> {
-        let peers = certs
-            .into_iter()
-            .enumerate()
-            .map(|(i, cert)| PeerConfig {
+        let peers = zip(servers.configs.iter(), certs)
+            .map(|(add_server, cert)| PeerConfig {
                 url: format!(
                     "{scheme}://localhost:{}",
-                    servers.configs[i]
+                    add_server
                         .config
                         .port
                         .expect("Port should have been defined by build_three")
@@ -476,9 +474,10 @@ pub fn get_client_test_identity(id: HelperIdentity, ix: ShardIndex) -> ClientIde
     let col: usize = usize::try_from(id).unwrap() - 1;
     let row: usize = usize::try_from(ix).unwrap();
     let (mut certificate, mut private_key) = get_test_certificate_and_key(row * 3 + col);
+    let (mut scertificate, mut sprivate_key) = get_test_certificate_and_key(row * 3 + col);
     ClientIdentities {
         helper: ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap(),
-        shard: ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap(),
+        shard: ClientIdentity::from_pkcs8(&mut scertificate, &mut sprivate_key).unwrap(),
     }
 }
 
