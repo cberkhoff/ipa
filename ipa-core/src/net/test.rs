@@ -177,7 +177,6 @@ pub fn server_config_https(
     }
 }
 
-#[derive(Default)]
 pub struct TestConfigBuilder {
     /// Can be empty meaning that free ports should be obtained from os
     /// rings > sharding | ring > 3 hosts
@@ -187,6 +186,18 @@ pub struct TestConfigBuilder {
     disable_https: bool,
     use_http1: bool,
     disable_matchkey_encryption: bool,
+}
+
+impl Default for TestConfigBuilder {
+    fn default() -> Self {
+        Self {
+            ports_by_ring: vec![],
+            sharding_factor: 1,
+            disable_https: false,
+            use_http1: false,
+            disable_matchkey_encryption: false,
+        }
+    }
 }
 
 impl TestConfigBuilder {
@@ -199,17 +210,6 @@ impl TestConfigBuilder {
             }],
             sharding_factor: 1,
             disable_https: true,
-            use_http1: false,
-            disable_matchkey_encryption: false,
-        }
-    }
-
-    #[must_use]
-    pub fn with_open_ports() -> Self {
-        Self {
-            ports_by_ring: vec![],
-            sharding_factor: 1,
-            disable_https: false,
             use_http1: false,
             disable_matchkey_encryption: false,
         }
