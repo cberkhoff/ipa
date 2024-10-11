@@ -18,7 +18,11 @@ async fn handler(
     Path(query_id): Path<QueryId>,
 ) -> Result<Json<kill::ResponseBody>, Error> {
     let req = Request { query_id };
-    match transport.clone_ref().dispatch(req, BodyStream::empty()).await {
+    match transport
+        .clone_ref()
+        .dispatch(req, BodyStream::empty())
+        .await
+    {
         Ok(state) => Ok(Json(kill::ResponseBody::from(state))),
         Err(ApiError::QueryKill(QueryKillStatus::NoSuchQuery(query_id))) => Err(
             Error::application(StatusCode::NOT_FOUND, QueryIdNotFound(query_id)),

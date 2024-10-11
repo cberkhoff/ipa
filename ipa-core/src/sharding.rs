@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::helpers::{HelperIdentity, TransportIdentity};
 
-
-pub trait TransportRestriction : Debug + Send + Sync + Clone + 'static  {
+pub trait TransportRestriction: Debug + Send + Sync + Clone + 'static {
     type Identity: TransportIdentity;
 }
 #[derive(Debug, Copy, Clone)]

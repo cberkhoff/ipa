@@ -2,7 +2,12 @@ mod config;
 mod handlers;
 
 use std::{
-    borrow::Cow, io, marker::PhantomData, net::{Ipv4Addr, SocketAddr, TcpListener}, ops::Deref, task::{Context, Poll},
+    borrow::Cow,
+    io,
+    marker::PhantomData,
+    net::{Ipv4Addr, SocketAddr, TcpListener},
+    ops::Deref,
+    task::{Context, Poll},
 };
 
 use ::tokio::{
@@ -35,14 +40,22 @@ use tower::{Layer, Service};
 use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
+use super::ShardHttpTransport;
 use crate::{
-    config::{NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::TransportIdentity, net::{
+    config::{
+        NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, ServerConfig, TlsConfig,
+    },
+    error::BoxError,
+    helpers::TransportIdentity,
+    net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
         MpcHttpTransport, CRYPTO_PROVIDER,
-    }, sharding::{HelpersRing, IntraHelper, TransportRestriction}, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
+    },
+    sharding::{HelpersRing, IntraHelper, TransportRestriction},
+    sync::Arc,
+    task::JoinHandle,
+    telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED},
 };
-
-use super::ShardHttpTransport;
 
 pub trait TracingSpanMaker: Send + Sync + Clone + 'static {
     fn make_span(&self) -> Span;
@@ -105,7 +118,6 @@ impl MpcHelperServer<IntraHelper> {
 }
 
 impl<R: TransportRestriction> MpcHelperServer<R> {
-
     #[cfg(all(test, unit_test))]
     async fn handle_req(&self, req: hyper::Request<axum::body::Body>) -> axum::response::Response {
         use tower::ServiceExt;
@@ -150,16 +162,12 @@ impl<R: TransportRestriction> MpcHelperServer<R> {
 
         let task_handle = match (self.config.disable_https, listener) {
             (true, Some(listener)) => {
-                let svc = svc
-                    .layer(self.id_header_layer.clone())
-                    .into_make_service();
+                let svc = svc.layer(self.id_header_layer.clone()).into_make_service();
                 spawn_server(axum_server::from_tcp(listener), handle.clone(), svc).await
             }
             (true, None) => {
                 let addr = SocketAddr::new(BIND_ADDRESS.into(), self.config.port.unwrap_or(0));
-                let svc = svc
-                    .layer(self.id_header_layer.clone())
-                    .into_make_service();
+                let svc = svc.layer(self.id_header_layer.clone()).into_make_service();
                 spawn_server(axum_server::bind(addr), handle.clone(), svc).await
             }
             (false, Some(listener)) => {
@@ -284,10 +292,7 @@ async fn rustls_config(
     let (cert, key) = certificate_and_key(config).await?;
 
     let mut trusted_certs = RootCertStore::empty();
-    for cert in certs
-        .into_iter()
-        .filter_map(|peer| peer.certificate)
-    {
+    for cert in certs.into_iter().filter_map(|peer| peer.certificate) {
         // Note that this uses `webpki::TrustAnchor::try_from_cert_der`, which *does not* validate
         // the certificate. That is not required for security, but might be desirable to flag
         // configuration errors.
@@ -329,7 +334,7 @@ impl<I: TransportIdentity> Deref for ClientIdentity<I> {
 }
 
 /// `Accept`or that sets an axum `Extension` indiciating the authenticated remote helper identity.
-/// Validating the certificate is something that happens earlier at connection time, this just 
+/// Validating the certificate is something that happens earlier at connection time, this just
 /// provide identity to the inner server handlers.
 #[derive(Clone)]
 struct ClientCertRecognizingAcceptor<R: TransportRestriction> {
@@ -379,15 +384,17 @@ where
                 .peer_certificates()
                 .and_then(<[_]>::first)
                 .expect("Unable to remove certificate from stream");
-            let option_id: Option<<R as TransportRestriction>::Identity> = network_config.identify_cert(cert);
+            let option_id: Option<<R as TransportRestriction>::Identity> =
+                network_config.identify_cert(cert);
             let client_id = option_id.map(|id| ClientIdentity(id));
-            let service = SetClientIdentityFromCertificate { inner: service, id: client_id };
+            let service = SetClientIdentityFromCertificate {
+                inner: service,
+                id: client_id,
+            };
             Ok((stream, service))
         })
     }
 }
-
-
 
 #[derive(Clone)]
 struct SetClientIdentityFromCertificate<S, R: TransportRestriction> {
@@ -395,8 +402,8 @@ struct SetClientIdentityFromCertificate<S, R: TransportRestriction> {
     id: Option<ClientIdentity<R::Identity>>,
 }
 
-impl<B, R, S> Service<Request<B>> for SetClientIdentityFromCertificate<S, R> 
-where 
+impl<B, R, S> Service<Request<B>> for SetClientIdentityFromCertificate<S, R>
+where
     S: Service<Request<B>>,
     R: TransportRestriction,
 {
@@ -418,7 +425,7 @@ where
 }
 
 #[derive(Clone)]
-struct ClientIdentityFromHeaderLayer<R: TransportRestriction>{
+struct ClientIdentityFromHeaderLayer<R: TransportRestriction> {
     restriction: PhantomData<R>,
     header_name: &'static HeaderName,
 }
@@ -445,7 +452,11 @@ impl<S, R: TransportRestriction> Layer<S> for ClientIdentityFromHeaderLayer<R> {
     type Service = SetClientIdentityFromHeader<S, R>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        SetClientIdentityFromHeader { inner, header_name: self.header_name.clone(), restriction: PhantomData }
+        SetClientIdentityFromHeader {
+            inner,
+            header_name: self.header_name.clone(),
+            restriction: PhantomData,
+        }
     }
 }
 
@@ -463,10 +474,10 @@ struct SetClientIdentityFromHeader<S, R: TransportRestriction> {
 
 impl<S, R: TransportRestriction> SetClientIdentityFromHeader<S, R> {
     fn new(inner: S, header_name: HeaderName) -> Self {
-        Self { 
+        Self {
             inner,
             header_name,
-            restriction: PhantomData 
+            restriction: PhantomData,
         }
     }
 }

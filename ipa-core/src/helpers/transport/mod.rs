@@ -43,7 +43,18 @@ use crate::{
 /// An identity of a peer that can be communicated with using [`Transport`]. There are currently two
 /// types of peers - helpers and shards.
 pub trait Identity:
-    Copy + Clone + Debug + PartialEq + Eq + PartialOrd + Ord + Hash + Send + Sync + TryFrom<usize> + 'static
+    Copy
+    + Clone
+    + Debug
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Hash
+    + Send
+    + Sync
+    + TryFrom<usize>
+    + 'static
 {
     fn as_str(&self) -> Cow<'static, str>;
 
@@ -54,7 +65,7 @@ impl Identity for ShardIndex {
     fn as_str(&self) -> Cow<'static, str> {
         Cow::Owned(self.to_string())
     }
-    
+
     fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
         parse_id(s)
     }
@@ -68,7 +79,7 @@ impl Identity for HelperIdentity {
             _ => unreachable!(),
         })
     }
-    
+
     fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
         parse_id(s)
     }
@@ -87,8 +98,9 @@ impl Identity for Role {
 }
 
 fn parse_id<'a, S: Deserialize<'a>>(s: &'a [u8]) -> Result<S, crate::error::Error> {
-    serde_json::from_slice(s).map_err(|_e| 
-        crate::error::Error::InvalidId(str::from_utf8(s).unwrap_or("<unparseable>").to_owned()))
+    serde_json::from_slice(s).map_err(|_e| {
+        crate::error::Error::InvalidId(str::from_utf8(s).unwrap_or("<unparseable>").to_owned())
+    })
 }
 
 pub trait ResourceIdentifier: Sized {}

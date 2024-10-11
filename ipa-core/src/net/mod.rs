@@ -25,8 +25,10 @@ pub use transport::{MpcHttpTransport, ShardHttpTransport};
 
 pub const APPLICATION_JSON: &str = "application/json";
 pub const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
-pub static HTTP_CLIENT_ID_HEADER: HeaderName = HeaderName::from_static("x-unverified-client-identity");
-pub static HTTP_SHARD_INDEX_HEADER: HeaderName = HeaderName::from_static("x-unverified-shard-index");
+pub static HTTP_CLIENT_ID_HEADER: HeaderName =
+    HeaderName::from_static("x-unverified-client-identity");
+pub static HTTP_SHARD_INDEX_HEADER: HeaderName =
+    HeaderName::from_static("x-unverified-shard-index");
 
 /// This has the same meaning as const defined in h2 crate, but we don't import it directly.
 /// According to the [`spec`] it cannot exceed 2^31 - 1.

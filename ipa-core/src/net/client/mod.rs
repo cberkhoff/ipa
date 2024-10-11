@@ -1,5 +1,11 @@
 use std::{
-    collections::HashMap, future::Future, io::{self, BufRead}, marker::PhantomData, pin::Pin, sync::Arc, task::{ready, Context, Poll}
+    collections::HashMap,
+    future::Future,
+    io::{self, BufRead},
+    marker::PhantomData,
+    pin::Pin,
+    sync::Arc,
+    task::{ready, Context, Poll},
 };
 
 use axum::{
@@ -21,13 +27,16 @@ use tracing::error;
 
 use crate::{
     config::{
-        ClientConfig, HyperClientConfigurator, NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig,
+        ClientConfig, HyperClientConfigurator, NetworkConfig, OwnedCertificate, OwnedPrivateKey,
+        PeerConfig,
     },
     helpers::{
-        query::{PrepareQuery, QueryConfig, QueryInput}, HelperIdentity, TransportIdentity
+        query::{PrepareQuery, QueryConfig, QueryInput},
+        HelperIdentity, TransportIdentity,
     },
     net::{http_serde, Error, CRYPTO_PROVIDER, HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER},
-    protocol::{Gate, QueryId}, sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
+    protocol::{Gate, QueryId},
+    sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
 };
 
 #[derive(Default)]
@@ -166,7 +175,6 @@ pub struct MpcHelperClient<R: TransportRestriction = HelpersRing> {
 }
 
 impl<R: TransportRestriction> MpcHelperClient<R> {
-
     /// Create a new client with the given configuration
     ///
     /// `identity`, if present, configures whether and how the client will authenticate to the server
@@ -189,9 +197,10 @@ impl<R: TransportRestriction> MpcHelperClient<R> {
                     error!("certificate identity ignored for HTTP client");
                     None
                 }
-                ClientIdentity::Header(id) => {
-                    Some((header_name.clone(), HeaderValue::from_str(id.as_str().as_ref()).unwrap() ))
-                }
+                ClientIdentity::Header(id) => Some((
+                    header_name.clone(),
+                    HeaderValue::from_str(id.as_str().as_ref()).unwrap(),
+                )),
                 ClientIdentity::None => None,
             };
             (
@@ -376,21 +385,28 @@ impl MpcHelperClient<IntraHelper> {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn shards_from_conf(conf: &NetworkConfig<IntraHelper>, identity: &ClientIdentity<IntraHelper>) -> HashMap<ShardIndex, Self> {
+    pub fn shards_from_conf(
+        conf: &NetworkConfig<IntraHelper>,
+        identity: &ClientIdentity<IntraHelper>,
+    ) -> HashMap<ShardIndex, Self> {
         conf.enumerate_peers()
             .into_iter()
-            .map(|(ix, peer_conf)| (ix, Self::new(
-                &conf.client, 
-                peer_conf.clone(), 
-                identity.clone_with_key(),
-                &HTTP_SHARD_INDEX_HEADER)))
+            .map(|(ix, peer_conf)| {
+                (
+                    ix,
+                    Self::new(
+                        &conf.client,
+                        peer_conf.clone(),
+                        identity.clone_with_key(),
+                        &HTTP_SHARD_INDEX_HEADER,
+                    ),
+                )
+            })
             .collect()
     }
-
 }
 
 impl MpcHelperClient<HelpersRing> {
-
     /// Create a set of clients for the MPC helpers in the supplied helper network configuration.
     ///
     /// This function returns a set of three clients, which may be used to talk to each of the
@@ -401,14 +417,18 @@ impl MpcHelperClient<HelpersRing> {
     /// Authentication is not required when calling the report collector APIs.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_conf(conf: &NetworkConfig<HelpersRing>, identity: &ClientIdentity<HelpersRing>) -> [Self; 3] {
-        conf.peers()
-            .each_ref()
-            .map(|peer_conf| Self::new(
-                &conf.client, 
-                peer_conf.clone(), 
+    pub fn from_conf(
+        conf: &NetworkConfig<HelpersRing>,
+        identity: &ClientIdentity<HelpersRing>,
+    ) -> [Self; 3] {
+        conf.peers().each_ref().map(|peer_conf| {
+            Self::new(
+                &conf.client,
+                peer_conf.clone(),
                 identity.clone_with_key(),
-                &HTTP_CLIENT_ID_HEADER))
+                &HTTP_CLIENT_ID_HEADER,
+            )
+        })
     }
 
     /// Intended to be called externally, by the report collector. Informs the MPC ring that
@@ -481,7 +501,6 @@ impl MpcHelperClient<HelpersRing> {
             Err(Error::from_failed_resp(resp).await)
         }
     }
-
 }
 
 fn make_http_connector() -> HttpConnector {
@@ -509,7 +528,8 @@ pub(crate) mod tests {
     use crate::{
         ff::{FieldType, Fp31},
         helpers::{
-            make_owned_handler, query::QueryType::TestMultiply, BytesStream, HelperIdentity, HelperResponse, RequestHandler, RoleAssignment, Transport, MESSAGE_PAYLOAD_SIZE_BYTES
+            make_owned_handler, query::QueryType::TestMultiply, BytesStream, HelperIdentity,
+            HelperResponse, RequestHandler, RoleAssignment, Transport, MESSAGE_PAYLOAD_SIZE_BYTES,
         },
         net::test::TestServer,
         protocol::step::TestExecutionStep,
@@ -531,8 +551,12 @@ pub(crate) mod tests {
             certificate: None,
             hpke_config: None,
         };
-        let client =
-            MpcHelperClient::new(&ClientConfig::default(), peer_config, ClientIdentity::<HelpersRing>::None, &HTTP_CLIENT_ID_HEADER);
+        let client = MpcHelperClient::new(
+            &ClientConfig::default(),
+            peer_config,
+            ClientIdentity::<HelpersRing>::None,
+            &HTTP_CLIENT_ID_HEADER,
+        );
 
         // The server's self-signed test cert is not in the system truststore, and we didn't supply
         // it in the client config, so the connection should fail with a certificate error.

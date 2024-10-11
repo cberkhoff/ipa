@@ -155,7 +155,6 @@ impl HelperApp {
 
 #[async_trait]
 impl RequestHandler<ShardIndex> for Inner {
-
     async fn handle(
         &self,
         req: Addr<ShardIndex>,

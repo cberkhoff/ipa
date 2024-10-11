@@ -1,5 +1,12 @@
 use std::{
-    array, borrow::{Borrow, Cow}, collections::HashMap, fmt::{Debug, Formatter}, iter::Zip, marker::PhantomData, path::PathBuf, time::Duration
+    array,
+    borrow::{Borrow, Cow},
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    iter::Zip,
+    marker::PhantomData,
+    path::PathBuf,
+    time::Duration,
 };
 
 use hyper::{http::uri::Scheme, Uri};
@@ -15,7 +22,8 @@ use crate::{
     hpke::{
         Deserializable as _, IpaPrivateKey, IpaPublicKey, KeyRegistry, PrivateKeyOnly,
         PublicKeyOnly, Serializable as _,
-    }, sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
+    },
+    sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
 };
 
 pub type OwnedCertificate = CertificateDer<'static>;
@@ -78,17 +86,21 @@ impl<R: TransportRestriction> NetworkConfig<R> {
     #[must_use]
     pub fn override_scheme(self, scheme: &Scheme) -> Self {
         Self {
-            peers: self.peers.into_iter().map(|mut peer| {
-                let mut parts = peer.url.into_parts();
-                parts.scheme = Some(scheme.clone());
-                // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
-                // scheme. If the URI does not have a scheme, it is not required to have a path.
-                if parts.path_and_query.is_none() {
-                    parts.path_and_query = Some("".parse().unwrap());
-                }
-                peer.url = Uri::try_from(parts).unwrap();
-                peer
-            }).collect(),
+            peers: self
+                .peers
+                .into_iter()
+                .map(|mut peer| {
+                    let mut parts = peer.url.into_parts();
+                    parts.scheme = Some(scheme.clone());
+                    // `http::uri::Uri::from_parts()` requires that a URI have a path if it has a
+                    // scheme. If the URI does not have a scheme, it is not required to have a path.
+                    if parts.path_and_query.is_none() {
+                        parts.path_and_query = Some("".parse().unwrap());
+                    }
+                    peer.url = Uri::try_from(parts).unwrap();
+                    peer
+                })
+                .collect(),
             ..self
         }
     }
@@ -116,7 +128,6 @@ impl<R: TransportRestriction> NetworkConfig<R> {
         }
         None
     }
-
 }
 
 impl NetworkConfig<IntraHelper> {
@@ -130,13 +141,18 @@ impl NetworkConfig<IntraHelper> {
 }
 
 impl NetworkConfig<HelpersRing> {
-    
     pub fn new_ring(ring: [PeerConfig; 3], client: ClientConfig) -> Self {
-        Self { peers: ring.to_vec(), client, restriction: PhantomData }
+        Self {
+            peers: ring.to_vec(),
+            client,
+            restriction: PhantomData,
+        }
     }
 
     pub fn peers(&self) -> [PeerConfig; 3] {
-        self.peers.clone().try_into()
+        self.peers
+            .clone()
+            .try_into()
             .unwrap_or_else(|v: Vec<_>| panic!("Expected a Vec of length 3 but it was {}", v.len()))
     }
 
@@ -144,12 +160,8 @@ impl NetworkConfig<HelpersRing> {
     pub fn enumerate_peers(
         &self,
     ) -> Zip<array::IntoIter<HelperIdentity, 3>, array::IntoIter<PeerConfig, 3>> {
-        HelperIdentity::make_three()
-            .into_iter()
-            .zip(self.peers())
+        HelperIdentity::make_three().into_iter().zip(self.peers())
     }
-
-    
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -464,7 +476,10 @@ pub struct KeyRegistries(Vec<KeyRegistry<PublicKeyOnly>>);
 impl KeyRegistries {
     /// # Panics
     /// If network file is improperly formatted
-    pub fn init_from(&mut self, network: &NetworkConfig<HelpersRing>) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
+    pub fn init_from(
+        &mut self,
+        network: &NetworkConfig<HelpersRing>,
+    ) -> Option<[&KeyRegistry<PublicKeyOnly>; 3]> {
         // Get the configs, if all three peers have one
         let configs = network.peers_iter().try_fold(Vec::new(), |acc, peer| {
             if let (mut vec, Some(hpke_config)) = (acc, peer.hpke_config.as_ref()) {

@@ -9,20 +9,28 @@
 
 #![allow(clippy::missing_panics_doc)]
 use std::{
-    array, iter::zip, net::{SocketAddr, TcpListener}
+    array,
+    iter::zip,
+    net::{SocketAddr, TcpListener},
 };
 
 use once_cell::sync::Lazy;
 use rustls_pki_types::CertificateDer;
 use tokio::task::JoinHandle;
 
+use super::client::ClientIdentities;
 use crate::{
     config::{
-        ClientConfig, HpkeClientConfig, HpkeServerConfig, NetworkConfig, PeerConfig, ServerConfig, TlsConfig
-    }, helpers::{repeat_n, HandlerBox, HelperIdentity, RequestHandler}, hpke::{Deserializable as _, IpaPublicKey}, net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport}, sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction}, sync::Arc, test_fixture::metrics::MetricsHandle
+        ClientConfig, HpkeClientConfig, HpkeServerConfig, NetworkConfig, PeerConfig, ServerConfig,
+        TlsConfig,
+    },
+    helpers::{repeat_n, HandlerBox, HelperIdentity, RequestHandler},
+    hpke::{Deserializable as _, IpaPublicKey},
+    net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport},
+    sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
+    sync::Arc,
+    test_fixture::metrics::MetricsHandle,
 };
-
-use super::client::ClientIdentities;
 
 pub struct Ports<C> {
     ring: C,
@@ -30,8 +38,10 @@ pub struct Ports<C> {
 }
 
 /// A single ring with 3 hosts, each with a ring and sharding port
-pub const DEFAULT_TEST_PORTS: Ports<[u16; 3]> = 
-    Ports { ring: [3000, 3001, 3002], sharding: [6000, 6001, 6002] };
+pub const DEFAULT_TEST_PORTS: Ports<[u16; 3]> = Ports {
+    ring: [3000, 3001, 3002],
+    sharding: [6000, 6001, 6002],
+};
 
 pub struct AddressableServer {
     /// Cntain the ports
@@ -41,7 +51,7 @@ pub struct AddressableServer {
 }
 
 pub struct Servers {
-    pub configs: Vec<AddressableServer>, 
+    pub configs: Vec<AddressableServer>,
 }
 
 impl Servers {
@@ -55,7 +65,7 @@ impl Servers {
             });
         }
         Servers {
-            configs: new_configs
+            configs: new_configs,
         }
     }
 
@@ -63,9 +73,9 @@ impl Servers {
         self.configs.push(config);
     }
 
-    pub fn iter(self: &Self) -> impl Iterator<Item=&AddressableServer>{
+    pub fn iter(self: &Self) -> impl Iterator<Item = &AddressableServer> {
         self.configs.iter()
-  }
+    }
 }
 
 impl Default for Servers {
@@ -76,7 +86,7 @@ impl Default for Servers {
 
 pub struct RestrictedNetwork<R: TransportRestriction> {
     pub network: NetworkConfig<R>, // Contains Clients
-    pub servers: Servers
+    pub servers: Servers,
 }
 
 impl RestrictedNetwork<IntraHelper> {
@@ -105,7 +115,10 @@ impl ShardedConfig {
         self.sharding_networks.get::<usize>(id.into()).unwrap()
     }
 
-    pub fn get_shards_for_helper_mut(&mut self, id: HelperIdentity) -> &mut RestrictedNetwork<IntraHelper> {
+    pub fn get_shards_for_helper_mut(
+        &mut self,
+        id: HelperIdentity,
+    ) -> &mut RestrictedNetwork<IntraHelper> {
         self.sharding_networks.get_mut::<usize>(id.into()).unwrap()
     }
 }
@@ -178,9 +191,9 @@ impl TestConfigBuilder {
     #[must_use]
     pub fn with_http_and_default_test_ports() -> Self {
         Self {
-            ports_by_ring: vec![Ports { 
-                ring: DEFAULT_TEST_PORTS.ring.to_vec(), 
-                sharding: DEFAULT_TEST_PORTS.sharding.to_vec()
+            ports_by_ring: vec![Ports {
+                ring: DEFAULT_TEST_PORTS.ring.to_vec(),
+                sharding: DEFAULT_TEST_PORTS.sharding.to_vec(),
             }],
             sharding_factor: 1,
             disable_https: true,
@@ -224,7 +237,9 @@ impl TestConfigBuilder {
     fn build_three(&self, optional_ports: Option<Vec<u16>>, ring_index: usize) -> Servers {
         let mut sockets = vec![None, None, None];
         let ports = optional_ports.unwrap_or_else(|| {
-            sockets = (0..3).map(|_| Some(TcpListener::bind("localhost:0").unwrap())).collect();
+            sockets = (0..3)
+                .map(|_| Some(TcpListener::bind("localhost:0").unwrap()))
+                .collect();
             sockets
                 .iter()
                 .map(|sock| sock.as_ref().unwrap().local_addr().unwrap().port())
@@ -232,22 +247,38 @@ impl TestConfigBuilder {
         });
         // Ports will always be defined after this. Socks only if there were no ports set.
         let configs = if self.disable_https {
-            ports.into_iter().map(|ports| server_config_insecure_http(ports, !self.disable_matchkey_encryption)).collect()
+            ports
+                .into_iter()
+                .map(|ports| server_config_insecure_http(ports, !self.disable_matchkey_encryption))
+                .collect()
         } else {
             let start_idx = ring_index * 3;
-            (start_idx..start_idx+3).map(|id| server_config_https(id, ports[id], !self.disable_matchkey_encryption)).collect()
+            (start_idx..start_idx + 3)
+                .map(|id| server_config_https(id, ports[id], !self.disable_matchkey_encryption))
+                .collect()
         };
         Servers::new(configs, sockets)
     }
 
-    fn build_network<R: TransportRestriction>(&self, servers: Servers, scheme: &str, certs: Vec<Option<CertificateDer<'static>>>) -> RestrictedNetwork<R> {
+    fn build_network<R: TransportRestriction>(
+        &self,
+        servers: Servers,
+        scheme: &str,
+        certs: Vec<Option<CertificateDer<'static>>>,
+    ) -> RestrictedNetwork<R> {
         let peers = certs
             .into_iter()
             .enumerate()
             .map(|(i, cert)| PeerConfig {
-                url: format!("{scheme}://localhost:{}", servers.configs[i].config.port.expect("Port should have been defined by build_three"))
-                    .parse()
-                    .unwrap(),
+                url: format!(
+                    "{scheme}://localhost:{}",
+                    servers.configs[i]
+                        .config
+                        .port
+                        .expect("Port should have been defined by build_three")
+                )
+                .parse()
+                .unwrap(),
                 certificate: cert,
                 hpke_config: if self.disable_matchkey_encryption {
                     None
@@ -265,8 +296,7 @@ impl TestConfigBuilder {
             .unwrap();
         let network = NetworkConfig::<R>::new(
             peers,
-            self
-                .use_http1
+            self.use_http1
                 .then(ClientConfig::use_http1)
                 .unwrap_or_default(),
         );
@@ -276,11 +306,8 @@ impl TestConfigBuilder {
     #[must_use]
     pub fn build(self) -> ShardedConfig {
         // first we build all the rings and then we connect all the shards
-        let mut sharding_networks_shards = vec![
-            Servers::default(), 
-            Servers::default(), 
-            Servers::default(), 
-        ];
+        let mut sharding_networks_shards =
+            vec![Servers::default(), Servers::default(), Servers::default()];
         let mut rings: Vec<RestrictedNetwork<HelpersRing>> = vec![];
         let mut sharding_networks: Vec<RestrictedNetwork<IntraHelper>> = vec![];
         for s in 0..self.sharding_factor {
@@ -305,8 +332,7 @@ impl TestConfigBuilder {
         }
         for (i, s) in sharding_networks_shards.into_iter().enumerate() {
             let (scheme, certs) = if self.disable_https {
-                
-                ("http", repeat_n( None, self.sharding_factor).collect())
+                ("http", repeat_n(None, self.sharding_factor).collect())
             } else {
                 ("https", get_certs_der_col(i).to_vec())
             };
@@ -402,7 +428,8 @@ impl TestServerBuilder {
             .build();
         let leaders_ring = test_config.rings.pop().unwrap();
         let first_server = leaders_ring.servers.configs.into_iter().next().unwrap();
-        let clients = MpcHelperClient::from_conf(&leaders_ring.network, &identities.helper.clone_with_key());
+        let clients =
+            MpcHelperClient::from_conf(&leaders_ring.network, &identities.helper.clone_with_key());
         let handler = self.handler.as_ref().map(HandlerBox::owning_ref);
         let client = clients[0].clone();
         let (transport, server) = MpcHttpTransport::new(
@@ -452,7 +479,6 @@ pub fn get_client_test_identity(id: HelperIdentity, ix: ShardIndex) -> ClientIde
         shard: ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap(),
     }
 }
-
 
 pub const TEST_CERTS: [&[u8]; 6] = [
     b"\
@@ -526,7 +552,7 @@ AwICpDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwCgYIKoZIzj0EAwID
 SAAwRQIhAN93g0zfB/4VyhNOaY1uCb4af4qMxcz1wp0yZ7HKAyWqAiBVPgv4X7aR
 JMepVZwIWJrVhnxdcmzOuONoeLZPZraFpw==
 -----END CERTIFICATE-----
-"
+",
 ];
 
 pub static TEST_CERTS_DER: Lazy<[CertificateDer; 6]> = Lazy::new(|| {
@@ -534,12 +560,12 @@ pub static TEST_CERTS_DER: Lazy<[CertificateDer; 6]> = Lazy::new(|| {
 });
 
 pub fn get_certs_der_row(ring_index: usize) -> [Option<CertificateDer<'static>>; 3] {
-    let r : [usize; 3] = array::from_fn(|i| i + ring_index * 3);
+    let r: [usize; 3] = array::from_fn(|i| i + ring_index * 3);
     r.map(|i| Some(TEST_CERTS_DER[i].clone()))
 }
 
 pub fn get_certs_der_col(helper: usize) -> [Option<CertificateDer<'static>>; 2] {
-    let r : [usize; 2] = array::from_fn(|i| i * 3 + helper);
+    let r: [usize; 2] = array::from_fn(|i| i * 3 + helper);
     r.map(|i| Some(TEST_CERTS_DER[i].clone()))
 }
 

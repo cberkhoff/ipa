@@ -17,7 +17,10 @@ use futures_util::{
 use hyper::{Request, StatusCode};
 use tower::{layer::layer_fn, Service};
 
-use crate::{helpers::HelperIdentity, net::{server::ClientIdentity, MpcHttpTransport}};
+use crate::{
+    helpers::HelperIdentity,
+    net::{server::ClientIdentity, MpcHttpTransport},
+};
 
 /// Construct router for IPA query web service
 ///

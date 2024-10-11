@@ -20,7 +20,8 @@ use crate::{
     ff::boolean_array::{BA20, BA3, BA8},
     helpers::query::DpMechanism,
     net::{ClientIdentity, MpcHelperClient},
-    protocol::{dp::NoiseParams, ipa_prf::oprf_padding::insecure::OPRFPaddingDp}, sharding::HelpersRing,
+    protocol::{dp::NoiseParams, ipa_prf::oprf_padding::insecure::OPRFPaddingDp},
+    sharding::HelpersRing,
 };
 
 pub type BreakdownKey = BA8;

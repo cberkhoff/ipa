@@ -103,18 +103,25 @@ struct ServerArgs {
     ring_tls_cert: Option<PathBuf>,
 
     /// TLS key for helper-to-helper communication
-    #[arg(long, visible_alias("key"), visible_alias("tls_key"), requires = "ring_tls_cert")]
+    #[arg(
+        long,
+        visible_alias("key"),
+        visible_alias("tls_key"),
+        requires = "ring_tls_cert"
+    )]
     ring_tls_key: Option<PathBuf>,
 
     /// TLS certificate for intra-helper communication
-    #[arg(
-        long,
-        requires = "shard_tls_key"
-    )]
+    #[arg(long, requires = "shard_tls_key")]
     shard_tls_cert: Option<PathBuf>,
 
     /// TLS key for intra-helper communication
-    #[arg(long, visible_alias("key"), visible_alias("tls_key"), requires = "shard_tls_cert")]
+    #[arg(
+        long,
+        visible_alias("key"),
+        visible_alias("tls_key"),
+        requires = "shard_tls_cert"
+    )]
     shard_tls_key: Option<PathBuf>,
 
     /// Public key for encrypting match keys
@@ -223,16 +230,19 @@ async fn server(args: ServerArgs) -> Result<(), BoxError> {
     );
 
     let shard_network_config_path = args.shard_network.as_deref().unwrap();
-    let shards_config = NetworkConfig::from_toml_str(&fs::read_to_string(shard_network_config_path)?)?
-        .override_scheme(&scheme);
+    let shards_config =
+        NetworkConfig::from_toml_str(&fs::read_to_string(shard_network_config_path)?)?
+            .override_scheme(&scheme);
 
-    let shard_clients = MpcHelperClient::<IntraHelper>::shards_from_conf(&shards_config, &shard_identity);
+    let shard_clients =
+        MpcHelperClient::<IntraHelper>::shards_from_conf(&shards_config, &shard_identity);
     let (shard_transport, _shard_server) = ShardHttpTransport::new(
-        shard_index, 
+        shard_index,
         shard_server_config,
-        shards_config, 
-        shard_clients, 
-        Some(shard_handler));
+        shards_config,
+        shard_clients,
+        Some(shard_handler),
+    );
 
     let _app = setup.connect(transport.clone(), shard_transport);
 
