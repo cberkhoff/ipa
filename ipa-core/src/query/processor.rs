@@ -383,7 +383,7 @@ mod tests {
         },
     };
 
-    fn prepare_query_handler<F, Fut>(cb: F) -> Arc<dyn RequestHandler<Identity = HelperIdentity>>
+    fn prepare_query_handler<F, Fut>(cb: F) -> Arc<dyn RequestHandler<HelperIdentity>>
     where
         F: Fn(PrepareQuery) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<HelperResponse, ApiError>> + Send + Sync + 'static,
@@ -394,7 +394,7 @@ mod tests {
         })
     }
 
-    fn respond_ok() -> Arc<dyn RequestHandler<Identity = HelperIdentity>> {
+    fn respond_ok() -> Arc<dyn RequestHandler<HelperIdentity>> {
         prepare_query_handler(move |_| async move { Ok(HelperResponse::ok()) })
     }
 

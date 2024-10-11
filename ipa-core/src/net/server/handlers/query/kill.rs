@@ -11,7 +11,6 @@ use crate::{
     },
     protocol::QueryId,
     query::QueryKillStatus,
-    sync::Arc,
 };
 
 async fn handler(

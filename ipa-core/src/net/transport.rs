@@ -7,7 +7,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use curve25519_dalek::traits::Identity;
 use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 

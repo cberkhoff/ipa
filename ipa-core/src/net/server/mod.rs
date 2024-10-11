@@ -2,8 +2,7 @@ mod config;
 mod handlers;
 
 use std::{
-    borrow::Cow, collections::HashMap, io, marker::PhantomData, net::{Ipv4Addr, SocketAddr, TcpListener}, ops::Deref, task::{Context, Poll},
-    hash::{Hash, Hasher},
+    borrow::Cow, io, marker::PhantomData, net::{Ipv4Addr, SocketAddr, TcpListener}, ops::Deref, task::{Context, Poll},
 };
 
 use ::tokio::{
@@ -22,7 +21,6 @@ use axum_server::{
     tls_rustls::{RustlsAcceptor, RustlsConfig},
     Handle, Server,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures::{
     future::{ready, BoxFuture, Either, Ready},
     Future, FutureExt,
@@ -30,16 +28,15 @@ use futures::{
 use hyper::{body::Incoming, header::HeaderName, Request};
 use metrics::increment_counter;
 use rustls::{server::WebPkiClientVerifier, RootCertStore};
-use rustls_pki_types::CertificateDer;
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::future as tokio;
 use tokio_rustls::server::TlsStream;
-use tower::{layer::layer_fn, Layer, Service};
+use tower::{Layer, Service};
 use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
 use crate::{
-    config::{NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::{HelperIdentity, TransportIdentity}, net::{
+    config::{NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, ServerConfig, TlsConfig}, error::BoxError, helpers::TransportIdentity, net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
         MpcHttpTransport, CRYPTO_PROVIDER,
     }, sharding::{HelpersRing, IntraHelper, TransportRestriction}, sync::Arc, task::JoinHandle, telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED}
@@ -112,7 +109,7 @@ impl<R: TransportRestriction> MpcHelperServer<R> {
     #[cfg(all(test, unit_test))]
     async fn handle_req(&self, req: hyper::Request<axum::body::Body>) -> axum::response::Response {
         use tower::ServiceExt;
-        self.router().oneshot(req).await.unwrap()
+        self.router.clone().oneshot(req).await.unwrap()
     }
 
     /// Starts the MPC helper service.
@@ -521,6 +518,7 @@ mod e2e_tests {
         client::danger::{ServerCertVerified, ServerCertVerifier},
         pki_types::ServerName,
     };
+    use rustls_pki_types::CertificateDer;
     use tracing::Level;
 
     use super::*;

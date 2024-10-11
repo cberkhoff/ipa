@@ -46,7 +46,7 @@ mod tests {
             server::handlers::query::test_helpers::{assert_fails_with, MaybeExtensionExt},
             test::TestServer,
         },
-        protocol::{Gate, QueryId}, sharding::HelpersRing,
+        protocol::{Gate, QueryId},
     };
 
     const DATA_LEN: usize = 3;
@@ -77,7 +77,7 @@ mod tests {
     }
 
     struct OverrideReq {
-        client_id: Option<ClientIdentity<HelpersRing>>,
+        client_id: Option<ClientIdentity<HelperIdentity>>,
         query_id: String,
         gate: Gate,
         payload: Vec<u8>,
