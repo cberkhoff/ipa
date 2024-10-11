@@ -112,14 +112,16 @@ impl ShardedConfig {
     }
 
     pub fn get_shards_for_helper(&self, id: HelperIdentity) -> &RestrictedNetwork<IntraHelper> {
-        self.sharding_networks.get::<usize>(id.into()).unwrap()
+        let ix: usize = usize::try_from(id).unwrap() - 1;
+        self.sharding_networks.get::<usize>(ix).unwrap()
     }
 
     pub fn get_shards_for_helper_mut(
         &mut self,
         id: HelperIdentity,
     ) -> &mut RestrictedNetwork<IntraHelper> {
-        self.sharding_networks.get_mut::<usize>(id.into()).unwrap()
+        let ix: usize = usize::try_from(id).unwrap() - 1;
+        self.sharding_networks.get_mut::<usize>(ix).unwrap()
     }
 }
 
