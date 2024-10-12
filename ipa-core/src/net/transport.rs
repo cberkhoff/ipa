@@ -527,7 +527,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn happy_case_twice() {
-        let conf = TestConfigBuilder::with_open_ports().build();
+        let conf = TestConfigBuilder::default().build();
         let clients =
             MpcHelperClient::from_conf(&conf.leaders_ring().network, &ClientIdentity::None);
         let _helpers = make_helpers(conf).await;
@@ -580,7 +580,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn three_helpers_http() {
-        let conf = TestConfigBuilder::with_open_ports()
+        let conf = TestConfigBuilder::default()
             .with_disable_https_option(true)
             .build();
         test_three_helpers(conf).await;
@@ -588,7 +588,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn three_helpers_https() {
-        let conf = TestConfigBuilder::with_open_ports().build();
+        let conf = TestConfigBuilder::default().build();
         test_three_helpers(conf).await;
     }
 }

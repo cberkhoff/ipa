@@ -80,6 +80,7 @@ impl TracingSpanMaker for () {
 /// IPA helper web service
 ///
 /// `MpcHelperServer` handles requests from both peer helpers and external clients.
+#[derive(Debug)]
 pub struct MpcHelperServer<R: TransportRestriction> {
     config: ServerConfig,
     network_config: NetworkConfig<R>,
@@ -383,7 +384,7 @@ where
                 .1
                 .peer_certificates()
                 .and_then(<[_]>::first);
-            let option_id: Option<<R as TransportRestriction>::Identity> =
+            let option_id: Option<R::Identity> =
                 network_config.identify_cert(opt_cert);
             let client_id = option_id.map(|id| ClientIdentity(id));
             let service = SetClientIdentityFromCertificate {
@@ -423,7 +424,7 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct ClientIdentityFromHeaderLayer<R: TransportRestriction> {
     restriction: PhantomData<R>,
     header_name: &'static HeaderName,

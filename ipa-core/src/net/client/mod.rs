@@ -39,7 +39,7 @@ use crate::{
     sharding::{HelpersRing, IntraHelper, ShardIndex, TransportRestriction},
 };
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum ClientIdentity<R: TransportRestriction> {
     /// Claim the specified helper identity without any additional authentication.
     ///

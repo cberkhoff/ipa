@@ -3,8 +3,7 @@ use std::{
     borrow::{Borrow, Cow},
     collections::HashMap,
     fmt::{Debug, Formatter},
-    iter::Zip,
-    marker::PhantomData,
+    iter::{zip, Zip},
     path::PathBuf,
     time::Duration,
 };
@@ -53,18 +52,10 @@ pub struct NetworkConfig<R: TransportRestriction> {
     pub client: ClientConfig,
 
     #[serde(skip)]
-    restriction: PhantomData<R>,
+    identities: Vec<R::Identity>,
 }
 
 impl<R: TransportRestriction> NetworkConfig<R> {
-    pub fn new(peers: Vec<PeerConfig>, client: ClientConfig) -> Self {
-        Self {
-            peers,
-            client,
-            restriction: PhantomData,
-        }
-    }
-
     /// Reads config from string. Expects config to be toml format.
     /// To read file, use `fs::read_to_string`
     ///
@@ -122,9 +113,9 @@ impl<R: TransportRestriction> NetworkConfig<R> {
     /// subject). This could be changed if the need arises.
     pub fn identify_cert(&self, cert: Option<&CertificateDer>) -> Option<R::Identity> {
         let cert = cert?;
-        for (ix, peer) in self.peers.iter().enumerate() {
-            if peer.certificate.as_ref() == Some(cert) {
-                return ix.try_into().ok();
+        for (id, p) in zip(self.identities.iter(), self.peers.iter()) {
+            if p.certificate.as_ref() == Some(cert) {
+                return Some(id.clone());
             }
         }
         None
@@ -132,6 +123,18 @@ impl<R: TransportRestriction> NetworkConfig<R> {
 }
 
 impl NetworkConfig<IntraHelper> {
+    pub fn new_shards(peers: Vec<PeerConfig>, client: ClientConfig) -> Self {
+        let mut identities = Vec::with_capacity(peers.len());
+        for (i, _p) in peers.iter().enumerate() {
+            identities.push(ShardIndex(i.try_into().unwrap()));
+        }
+        Self {
+            peers,
+            client,
+            identities,
+        }
+    }
+
     pub fn enumerate_peers(&self) -> HashMap<ShardIndex, &PeerConfig> {
         let mut indexed_peers = HashMap::new();
         for (i, p) in self.peers.iter().enumerate() {
@@ -142,11 +145,12 @@ impl NetworkConfig<IntraHelper> {
 }
 
 impl NetworkConfig<HelpersRing> {
-    pub fn new_ring(ring: [PeerConfig; 3], client: ClientConfig) -> Self {
+    pub fn new_ring(ring: Vec<PeerConfig>, client: ClientConfig) -> Self {
+        assert_eq!(3, ring.len());
         Self {
             peers: ring.to_vec(),
             client,
-            restriction: PhantomData,
+            identities: HelperIdentity::make_three().to_vec(),
         }
     }
 

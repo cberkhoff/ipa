@@ -262,12 +262,38 @@ impl TestConfigBuilder {
         Servers::new(configs, sockets)
     }
 
-    fn build_network<R: TransportRestriction>(
-        &self,
+    fn build_ring_network(&self,
         servers: Servers,
         scheme: &str,
         certs: Vec<Option<CertificateDer<'static>>>,
-    ) -> RestrictedNetwork<R> {
+    ) -> RestrictedNetwork<HelpersRing> {
+        let (peers, client_config) = self.build_network(&servers, scheme, certs);
+        let network = NetworkConfig::<HelpersRing>::new_ring(
+            peers,
+            client_config
+        );
+        RestrictedNetwork { network, servers }
+    }
+
+    fn build_shard_network(&self,
+        servers: Servers,
+        scheme: &str,
+        certs: Vec<Option<CertificateDer<'static>>>,
+    ) -> RestrictedNetwork<IntraHelper> {
+        let (peers, client_config) = self.build_network(&servers, scheme, certs);
+        let network = NetworkConfig::<IntraHelper>::new_shards(
+            peers,
+            client_config
+        );
+        RestrictedNetwork { network, servers }
+    }
+
+    fn build_network(
+        &self,
+        servers: &Servers,
+        scheme: &str,
+        certs: Vec<Option<CertificateDer<'static>>>,
+    ) -> (Vec<PeerConfig>, ClientConfig) {
         let peers = zip(servers.configs.iter(), certs)
             .map(|(add_server, cert)| PeerConfig {
                 url: format!(
@@ -294,13 +320,9 @@ impl TestConfigBuilder {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        let network = NetworkConfig::<R>::new(
-            peers,
-            self.use_http1
-                .then(ClientConfig::use_http1)
-                .unwrap_or_default(),
-        );
-        RestrictedNetwork { network, servers }
+        (peers, self.use_http1
+            .then(ClientConfig::use_http1)
+            .unwrap_or_default(), )
     }
 
     #[must_use]
@@ -321,7 +343,7 @@ impl TestConfigBuilder {
             } else {
                 ("https", get_certs_der_row(s))
             };
-            let ring_network = self.build_network(ring_servers, scheme, certs.to_vec());
+            let ring_network = self.build_ring_network(ring_servers, scheme, certs.to_vec());
             rings.push(ring_network);
 
             // We create the sharding servers and accumulate them but don't connect them yet
@@ -336,7 +358,7 @@ impl TestConfigBuilder {
             } else {
                 ("https", get_certs_der_col(i).to_vec())
             };
-            sharding_networks.push(self.build_network(s, scheme, certs));
+            sharding_networks.push(self.build_shard_network(s, scheme, certs));
         }
 
         ShardedConfig {
@@ -440,12 +462,9 @@ impl TestServerBuilder {
             handler,
         );
         let (addr, handle) = server.start_on(first_server.socket, self.metrics).await;
-        // Get the config for HelperIdentity::ONE
-        //let h1_peer_config = leaders_ring.network.peers().into_iter().next().unwrap();
         // At some point it might be appropriate to return two clients here -- the first being
         // another helper and the second being a report collector. For now we use the same client
         // for both types of calls.
-        //let client = MpcHelperClient::new(&leaders_ring.network.client, h1_peer_config, identity);
         TestServer {
             addr,
             handle,
