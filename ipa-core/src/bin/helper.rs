@@ -54,11 +54,11 @@ struct ServerArgs {
     identity: Option<usize>,
 
     /// Index of this shard within a helper.
-    #[arg(long, default_value = "0", requires = "total_shards")]
+    #[arg(long, default_value = "0")]
     index: u32,
 
     /// Index of this shard within a helper.
-    #[arg(long, default_value = "1", requires = "index")]
+    #[arg(long, default_value = "1")]
     total_shards: u32,
 
     /// Port to listen on for helper-to-helper communication.
@@ -72,7 +72,7 @@ struct ServerArgs {
     /// Use the supplied prebound socket instead of binding a new socket
     ///
     /// This is only intended for avoiding port conflicts in tests.
-    #[arg(hide = true, visible_alias("server_socket_fd"), long)]
+    #[arg(hide = true, visible_alias("server-socket-fd"), long)]
     ring_server_socket_fd: Option<RawFd>,
 
     /// Use the supplied prebound socket instead of binding a new socket for inter shard communication.
@@ -89,7 +89,7 @@ struct ServerArgs {
     #[arg(long, visible_alias("network"), required = true)]
     ring_network: Option<PathBuf>,
 
-    #[arg(long, required = true)]
+    #[arg(long)]
     shard_network: Option<PathBuf>,
 
     /// TLS certificate for helper-to-helper communication
@@ -98,7 +98,7 @@ struct ServerArgs {
         visible_alias("cert"),
         visible_alias("tls-certificate"),
         visible_alias("tls-cert"),
-        requires = "tls_key"
+        requires = "ring_tls_key"
     )]
     ring_tls_cert: Option<PathBuf>,
 
@@ -106,7 +106,7 @@ struct ServerArgs {
     #[arg(
         long,
         visible_alias("key"),
-        visible_alias("tls_key"),
+        visible_alias("tls-key"),
         requires = "ring_tls_cert"
     )]
     ring_tls_key: Option<PathBuf>,
@@ -118,8 +118,6 @@ struct ServerArgs {
     /// TLS key for intra-helper communication
     #[arg(
         long,
-        visible_alias("key"),
-        visible_alias("tls_key"),
         requires = "shard_tls_cert"
     )]
     shard_tls_key: Option<PathBuf>,
