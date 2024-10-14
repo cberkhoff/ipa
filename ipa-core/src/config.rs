@@ -51,6 +51,7 @@ pub struct NetworkConfig<R: TransportRestriction> {
     #[serde(default)]
     pub client: ClientConfig,
 
+    // TODO: turn into iterator and use it (a fn?)
     #[serde(skip)]
     identities: Vec<R::Identity>,
 }

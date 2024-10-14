@@ -16,9 +16,7 @@ use ::tokio::{
     net::TcpStream,
 };
 use axum::{
-    response::{IntoResponse, Response},
-    routing::IntoMakeService,
-    Router,
+    http::HeaderValue, response::{IntoResponse, Response}, routing::IntoMakeService, Router
 };
 use axum_server::{
     accept::Accept,
@@ -472,6 +470,15 @@ struct SetClientIdentityFromHeader<S, R: TransportRestriction> {
     restriction: PhantomData<R>,
 }
 
+impl<S, R: TransportRestriction> SetClientIdentityFromHeader<S, R> {
+    fn parse_client_id(header_value: &HeaderValue) -> Result<ClientIdentity<R::Identity>, Error> {
+        let header_str = header_value.to_str()?;
+        R::Identity::from_str(header_str)
+            .map_err(|e| Error::InvalidHeader(Box::new(e)))
+            .map(|id| ClientIdentity(id))
+    }
+}
+
 impl<B, S, R> Service<Request<B>> for SetClientIdentityFromHeader<S, R>
 where
     S: Service<Request<B>, Response = Response>,
@@ -487,11 +494,12 @@ where
     }
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
+        let h = req.headers();
+        let r =self.restriction;
+        println!("{h:?}, r={r:?}");
         if let Some(header_value) = req.headers().get(self.header_name.clone()) {
-            let id_result = R::Identity::from_bits(header_value.as_ref())
-                .map_err(|e| Error::InvalidHeader(format!("{}: {e}", self.header_name).into()));
-            match id_result {
-                Ok(id) => req.extensions_mut().insert(ClientIdentity(id)),
+            match Self::parse_client_id(header_value) {
+                Ok(id) => req.extensions_mut().insert(id),
                 Err(err) => return ready(Ok(err.into_response())).right_future(),
             };
         }

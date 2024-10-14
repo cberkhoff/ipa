@@ -7,7 +7,6 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use serde::Deserialize;
 
 use crate::{
     helpers::HelperIdentity,
@@ -58,17 +57,21 @@ pub trait Identity:
 {
     fn as_str(&self) -> Cow<'static, str>;
 
-    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error>;
+    fn from_str(s: &str) -> Result<Self, crate::error::Error>;
 }
 
 impl Identity for ShardIndex {
     fn as_str(&self) -> Cow<'static, str> {
         Cow::Owned(self.to_string())
     }
-
-    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
-        parse_id(s)
+    
+    fn from_str(s: &str) -> Result<Self, crate::error::Error> {
+        s.parse::<u32>()
+            .map_err(|_e| crate::error::Error::InvalidId(format!("The string {s} is an invalid Shard Index")))
+            .map(|i| ShardIndex::from(i))
     }
+
+    
 }
 impl Identity for HelperIdentity {
     fn as_str(&self) -> Cow<'static, str> {
@@ -80,8 +83,13 @@ impl Identity for HelperIdentity {
         })
     }
 
-    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
-        parse_id(s)
+    fn from_str(s: &str) -> Result<Self, crate::error::Error> {
+        match s {
+            "A" => Ok(Self::ONE),
+            "B" => Ok(Self::TWO),
+            "C" => Ok(Self::THREE),
+            _ => Err(crate::error::Error::InvalidId(format!("The string {s} is an invalid Helper Identity")))
+        }
     }
 }
 
@@ -92,15 +100,14 @@ impl Identity for Role {
         Cow::Borrowed(Role::as_static_str(self))
     }
 
-    fn from_bits(s: &[u8]) -> Result<Self, crate::error::Error> {
-        parse_id(s)
+    fn from_str(s: &str) -> Result<Self, crate::error::Error> {
+        match s {
+            Self::H1_STR => Ok(Self::H1),
+            Self::H2_STR => Ok(Self::H2),
+            Self::H3_STR => Ok(Self::H3),
+            _ => Err(crate::error::Error::InvalidId(format!("The string {s} is an invalid Role")))
+        }
     }
-}
-
-fn parse_id<'a, S: Deserialize<'a>>(s: &'a [u8]) -> Result<S, crate::error::Error> {
-    serde_json::from_slice(s).map_err(|_e| {
-        crate::error::Error::InvalidId(str::from_utf8(s).unwrap_or("<unparseable>").to_owned())
-    })
 }
 
 pub trait ResourceIdentifier: Sized {}
