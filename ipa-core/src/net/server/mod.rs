@@ -39,6 +39,7 @@ use tower::{Layer, Service};
 use tower_http::trace::TraceLayer;
 use tracing::{error, Span};
 
+use super::ShardHttpTransport;
 use crate::{
     config::{
         NetworkConfig, OwnedCertificate, OwnedPrivateKey, PeerConfig, ServerConfig, TlsConfig,
@@ -48,9 +49,9 @@ use crate::{
     helpers::TransportIdentity,
     net::{
         parse_certificate_and_private_key_bytes, server::config::HttpServerConfig, Error,
-        HttpTransport, CRYPTO_PROVIDER,
+        MpcHttpTransport, CRYPTO_PROVIDER,
     },
-    sharding::{Ring, TransportRestriction},
+    sharding::{Ring, Sharding, TransportRestriction},
     sync::Arc,
     telemetry::metrics::{web::RequestProtocolVersion, REQUESTS_RECEIVED},
 };
@@ -84,7 +85,6 @@ impl TracingSpanMaker for () {
 /// HTTP API for shards or for other Helpers. External clients can reach out to both APIs to push
 /// the input data among other things.
 pub struct MpcHelperServer<R: TransportRestriction = Ring> {
-    _transport: Arc<HttpTransport>,
     config: ServerConfig,
     network_config: NetworkConfig<R>,
     router: Router,
@@ -92,18 +92,34 @@ pub struct MpcHelperServer<R: TransportRestriction = Ring> {
 }
 
 impl MpcHelperServer<Ring> {
+    #[must_use]
     pub fn new_ring(
-        transport: Arc<HttpTransport>,
+        transport: &MpcHttpTransport,
         config: ServerConfig,
         network_config: NetworkConfig<Ring>,
     ) -> Self {
-        let router = handlers::router(Arc::clone(&transport));
+        let router = handlers::router(transport.clone());
         MpcHelperServer {
-            _transport: transport,
             config,
             network_config,
             router,
             id_header_layer: ClientIdentityFromHeaderLayer::new_ring(),
+        }
+    }
+}
+
+impl MpcHelperServer<Sharding> {
+    #[must_use]
+    pub fn new_shards(
+        _transport: &ShardHttpTransport,
+        config: ServerConfig,
+        network_config: NetworkConfig<Sharding>,
+    ) -> Self {
+        MpcHelperServer {
+            config,
+            network_config,
+            router: Router::new(),
+            id_header_layer: ClientIdentityFromHeaderLayer::new_shards(),
         }
     }
 }
@@ -428,6 +444,15 @@ impl ClientIdentityFromHeaderLayer<Ring> {
         Self {
             restriction: PhantomData,
             header_name: &super::HTTP_CLIENT_ID_HEADER,
+        }
+    }
+}
+
+impl ClientIdentityFromHeaderLayer<Sharding> {
+    fn new_shards() -> Self {
+        Self {
+            restriction: PhantomData,
+            header_name: &super::HTTP_SHARD_INDEX_HEADER,
         }
     }
 }

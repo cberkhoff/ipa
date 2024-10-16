@@ -33,11 +33,11 @@ use crate::{
     executor::IpaRuntime,
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
-        TransportIdentity,
+        HelperIdentity, TransportIdentity,
     },
-    net::{http_serde, Error, CRYPTO_PROVIDER, HTTP_CLIENT_ID_HEADER},
+    net::{http_serde, Error, CRYPTO_PROVIDER, HTTP_CLIENT_ID_HEADER, HTTP_SHARD_INDEX_HEADER},
     protocol::{Gate, QueryId},
-    sharding::{Ring, TransportRestriction},
+    sharding::{Ring, ShardIndex, Sharding, TransportRestriction},
 };
 
 #[derive(Default, Debug)]
@@ -55,6 +55,21 @@ pub enum ClientIdentity<R: TransportRestriction = Ring> {
     /// Do not authenticate nor claim a helper identity.
     #[default]
     None,
+}
+
+#[allow(dead_code)]
+pub struct ClientIdentities {
+    pub helper: ClientIdentity<Ring>,
+    pub shard: ClientIdentity<Sharding>,
+}
+
+impl ClientIdentities {
+    pub fn new_headers(id: HelperIdentity, ix: ShardIndex) -> Self {
+        Self {
+            helper: ClientIdentity::Header(id),
+            shard: ClientIdentity::Header(ix),
+        }
+    }
 }
 
 impl<R: TransportRestriction> ClientIdentity<R> {
@@ -182,7 +197,7 @@ impl<R: TransportRestriction> MpcHelperClient<R> {
         let (connector, auth_header) = if peer_config.url.scheme() == Some(&Scheme::HTTP) {
             // This connector works for both http and https. A regular HttpConnector would suffice,
             // but would make the type of `self.client` variable.
-            let auth_header = match identity {
+            let auth_header: Option<(HeaderName, HeaderValue)> = match identity {
                 ClientIdentity::Certificate(_) => {
                     error!("certificate identity ignored for HTTP client");
                     None
@@ -372,6 +387,40 @@ impl<R: TransportRestriction> MpcHelperClient<R> {
     }
 }
 
+impl MpcHelperClient<Sharding> {
+    /// Create a set of clients for the MPC helpers in the supplied helper network configuration.
+    ///
+    /// This function returns a set of three clients, which may be used to talk to each of the
+    /// helpers.
+    ///
+    /// `identity` configures whether and how the client will authenticate to the server. It is for
+    /// the helper making the calls, so the same one is used for all three of the clients.
+    /// Authentication is not required when calling the report collector APIs.
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn shards_from_conf(
+        runtime: &IpaRuntime,
+        conf: &NetworkConfig<Sharding>,
+        identity: &ClientIdentity<Sharding>,
+    ) -> HashMap<ShardIndex, Self> {
+        conf.peers_map()
+            .into_iter()
+            .map(|(ix, peer_conf)| {
+                (
+                    ix,
+                    Self::new(
+                        runtime.clone(),
+                        &conf.client,
+                        peer_conf.clone(),
+                        identity.clone_with_key(),
+                        &HTTP_SHARD_INDEX_HEADER,
+                    ),
+                )
+            })
+            .collect()
+    }
+}
+
 impl MpcHelperClient<Ring> {
     /// Create a set of clients for the MPC helpers in the supplied helper network configuration.
     ///
@@ -550,7 +599,7 @@ pub(crate) mod tests {
         ClientOut: Eq + Debug,
         ClientFut: Future<Output = ClientOut>,
         ClientF: Fn(MpcHelperClient) -> ClientFut,
-        HandlerF: Fn() -> Arc<dyn RequestHandler<Identity = HelperIdentity>>,
+        HandlerF: Fn() -> Arc<dyn RequestHandler<HelperIdentity>>,
     {
         let mut results = Vec::with_capacity(4);
         for (use_https, use_http1) in zip([true, false], [true, false]) {
@@ -694,7 +743,7 @@ pub(crate) mod tests {
 
         MpcHelperClient::<Ring>::resp_ok(resp).await.unwrap();
 
-        let mut stream = Arc::clone(&transport)
+        let mut stream = transport
             .receive(HelperIdentity::ONE, (QueryId, expected_step.clone()))
             .into_bytes_stream();
 

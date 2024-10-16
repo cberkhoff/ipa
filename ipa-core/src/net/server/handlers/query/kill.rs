@@ -7,20 +7,22 @@ use crate::{
         http_serde::query::{kill, kill::Request},
         server::Error,
         Error::QueryIdNotFound,
-        HttpTransport,
+        MpcHttpTransport,
     },
     protocol::QueryId,
     query::QueryKillStatus,
-    sync::Arc,
 };
 
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<MpcHttpTransport>,
     Path(query_id): Path<QueryId>,
 ) -> Result<Json<kill::ResponseBody>, Error> {
     let req = Request { query_id };
-    let transport = Transport::clone_ref(&*transport);
-    match transport.dispatch(req, BodyStream::empty()).await {
+    match transport
+        .clone_ref()
+        .dispatch(req, BodyStream::empty())
+        .await
+    {
         Ok(state) => Ok(Json(kill::ResponseBody::from(state))),
         Err(ApiError::QueryKill(QueryKillStatus::NoSuchQuery(query_id))) => Err(
             Error::application(StatusCode::NOT_FOUND, QueryIdNotFound(query_id)),
@@ -29,7 +31,7 @@ async fn handler(
     }
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: MpcHttpTransport) -> Router {
     Router::new()
         .route(kill::AXUM_PATH, post(handler))
         .layer(Extension(transport))

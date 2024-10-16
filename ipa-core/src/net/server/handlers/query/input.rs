@@ -3,13 +3,12 @@ use hyper::StatusCode;
 
 use crate::{
     helpers::{query::QueryInput, routing::RouteId, BodyStream, Transport},
-    net::{http_serde, Error, HttpTransport},
+    net::{http_serde, Error, MpcHttpTransport},
     protocol::QueryId,
-    sync::Arc,
 };
 
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<MpcHttpTransport>,
     Path(query_id): Path<QueryId>,
     input_stream: BodyStream,
 ) -> Result<(), Error> {
@@ -17,8 +16,8 @@ async fn handler(
         query_id,
         input_stream,
     };
-    let transport = Transport::clone_ref(&*transport);
     let _ = transport
+        .clone_ref()
         .dispatch(
             (RouteId::QueryInput, query_input.query_id),
             query_input.input_stream,
@@ -29,7 +28,7 @@ async fn handler(
     Ok(())
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: MpcHttpTransport) -> Router {
     Router::new()
         .route(http_serde::query::input::AXUM_PATH, post(handler))
         .layer(Extension(transport))

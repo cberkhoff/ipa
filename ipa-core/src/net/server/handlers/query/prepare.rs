@@ -9,17 +9,16 @@ use crate::{
             query::{prepare::RequestBody, QueryConfigQueryParams},
         },
         server::ClientIdentity,
-        Error, HttpTransport,
+        Error, MpcHttpTransport,
     },
     protocol::QueryId,
     query::PrepareQueryError,
-    sync::Arc,
 };
 
 /// Called by whichever peer helper is the leader for an individual query, to initiatialize
 /// processing of that query.
 async fn handler(
-    transport: Extension<Arc<HttpTransport>>,
+    transport: Extension<MpcHttpTransport>,
     _: Extension<ClientIdentity<HelperIdentity>>, // require that client is an authenticated helper
     Path(query_id): Path<QueryId>,
     QueryConfigQueryParams(config): QueryConfigQueryParams,
@@ -30,8 +29,8 @@ async fn handler(
         config,
         roles,
     };
-    let transport = Transport::clone_ref(&*transport);
     let _ = transport
+        .clone_ref()
         .dispatch(data, BodyStream::empty())
         .await
         .map_err(|e| Error::application(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -45,7 +44,7 @@ impl IntoResponse for PrepareQueryError {
     }
 }
 
-pub fn router(transport: Arc<HttpTransport>) -> Router {
+pub fn router(transport: MpcHttpTransport) -> Router {
     Router::new()
         .route(http_serde::query::prepare::AXUM_PATH, post(handler))
         .layer(Extension(transport))

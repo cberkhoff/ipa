@@ -10,43 +10,127 @@
 #![allow(clippy::missing_panics_doc)]
 use std::{
     array,
+    iter::zip,
     net::{SocketAddr, TcpListener},
 };
 
 use once_cell::sync::Lazy;
 use rustls_pki_types::CertificateDer;
 
+use super::client::ClientIdentities;
 use crate::{
     config::{
         ClientConfig, HpkeClientConfig, HpkeServerConfig, NetworkConfig, PeerConfig, ServerConfig,
         TlsConfig,
     },
     executor::{IpaJoinHandle, IpaRuntime},
-    helpers::{HandlerBox, HelperIdentity, RequestHandler},
+    helpers::{repeat_n, HandlerBox, HelperIdentity, RequestHandler},
     hpke::{Deserializable as _, IpaPublicKey},
-    net::{ClientIdentity, HttpTransport, MpcHelperClient, MpcHelperServer},
-    sharding::Ring,
+    net::{ClientIdentity, MpcHelperClient, MpcHelperServer, MpcHttpTransport},
+    sharding::{Ring, ShardIndex, Sharding, TransportRestriction},
     sync::Arc,
     test_fixture::metrics::MetricsHandle,
 };
 
-pub const DEFAULT_TEST_PORTS: [u16; 3] = [3000, 3001, 3002];
-
-pub struct TestConfig {
-    pub disable_https: bool,
-    pub network: NetworkConfig<Ring>,
-    pub servers: [ServerConfig; 3],
-    pub sockets: Option<[TcpListener; 3]>,
+pub struct Ports<C> {
+    ring: C,
+    sharding: C,
 }
 
-impl TestConfig {
+/// A single ring with 3 hosts, each with a ring and sharding port
+pub const DEFAULT_TEST_PORTS: Ports<[u16; 3]> = Ports {
+    ring: [3000, 3001, 3002],
+    sharding: [6000, 6001, 6002],
+};
+
+pub struct AddressableServer {
+    /// Cntain the ports
+    pub config: ServerConfig,
+    /// Sockets are created if no port was specified.
+    pub socket: Option<TcpListener>,
+}
+
+#[derive(Default)]
+pub struct Servers {
+    pub configs: Vec<AddressableServer>,
+}
+
+impl Servers {
+    fn new(configs: Vec<ServerConfig>, sockets: Vec<Option<TcpListener>>) -> Self {
+        assert_eq!(configs.len(), sockets.len());
+        let mut new_configs = Vec::with_capacity(configs.len());
+        for s in zip(configs, sockets) {
+            new_configs.push(AddressableServer {
+                config: s.0,
+                socket: s.1,
+            });
+        }
+        Servers {
+            configs: new_configs,
+        }
+    }
+
+    fn push_shard(&mut self, config: AddressableServer) {
+        self.configs.push(config);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &AddressableServer> {
+        self.configs.iter()
+    }
+}
+
+pub struct RestrictedNetwork<R: TransportRestriction> {
+    pub network: NetworkConfig<R>, // Contains Clients
+    pub servers: Servers,
+}
+
+impl RestrictedNetwork<Sharding> {
+    #[must_use]
+    pub fn get_first_shard(&self) -> &AddressableServer {
+        self.servers.configs.first().unwrap()
+    }
+
+    pub fn get_first_shard_mut(&mut self) -> &mut AddressableServer {
+        self.servers.configs.get_mut(0).unwrap()
+    }
+}
+
+// If the underlying AddressableServer have socets, then you will want to make this mutable to take the sockets out
+pub struct ShardedConfig {
+    pub disable_https: bool,
+    pub rings: Vec<RestrictedNetwork<Ring>>,
+    pub sharding_networks: Vec<RestrictedNetwork<Sharding>>,
+}
+
+impl ShardedConfig {
+    #[must_use]
+    pub fn leaders_ring(&self) -> &RestrictedNetwork<Ring> {
+        &self.rings[0]
+    }
+
+    #[must_use]
+    pub fn get_shards_for_helper(&self, id: HelperIdentity) -> &RestrictedNetwork<Sharding> {
+        let ix: usize = usize::from(id) - 1;
+        self.sharding_networks.get::<usize>(ix).unwrap()
+    }
+
+    pub fn get_shards_for_helper_mut(
+        &mut self,
+        id: HelperIdentity,
+    ) -> &mut RestrictedNetwork<Sharding> {
+        let ix: usize = usize::from(id) - 1;
+        self.sharding_networks.get_mut::<usize>(ix).unwrap()
+    }
+}
+
+impl ShardedConfig {
     #[must_use]
     pub fn builder() -> TestConfigBuilder {
         TestConfigBuilder::default()
     }
 }
 
-impl Default for TestConfig {
+impl Default for ShardedConfig {
     fn default() -> Self {
         Self::builder().build()
     }
@@ -75,11 +159,11 @@ fn server_config_insecure_http(port: u16, matchkey_encryption: bool) -> ServerCo
 
 #[must_use]
 pub fn server_config_https(
-    id: HelperIdentity,
+    cert_index: usize,
     port: u16,
     matchkey_encryption: bool,
 ) -> ServerConfig {
-    let (certificate, private_key) = get_test_certificate_and_key(id);
+    let (certificate, private_key) = get_test_certificate_and_key(cert_index);
     ServerConfig {
         port: Some(port),
         disable_https: false,
@@ -91,30 +175,39 @@ pub fn server_config_https(
     }
 }
 
-#[derive(Default)]
 pub struct TestConfigBuilder {
-    ports: Option<[u16; 3]>,
+    /// Can be empty meaning that free ports should be obtained from os
+    /// rings > sharding | ring > 3 hosts
+    ports_by_ring: Vec<Ports<Vec<u16>>>,
+    /// Describes the network
+    sharding_factor: usize,
     disable_https: bool,
     use_http1: bool,
     disable_matchkey_encryption: bool,
+}
+
+impl Default for TestConfigBuilder {
+    fn default() -> Self {
+        Self {
+            ports_by_ring: vec![],
+            sharding_factor: 1,
+            disable_https: false,
+            use_http1: false,
+            disable_matchkey_encryption: false,
+        }
+    }
 }
 
 impl TestConfigBuilder {
     #[must_use]
     pub fn with_http_and_default_test_ports() -> Self {
         Self {
-            ports: Some(DEFAULT_TEST_PORTS),
+            ports_by_ring: vec![Ports {
+                ring: DEFAULT_TEST_PORTS.ring.to_vec(),
+                sharding: DEFAULT_TEST_PORTS.sharding.to_vec(),
+            }],
+            sharding_factor: 1,
             disable_https: true,
-            use_http1: false,
-            disable_matchkey_encryption: false,
-        }
-    }
-
-    #[must_use]
-    pub fn with_open_ports() -> Self {
-        Self {
-            ports: None,
-            disable_https: false,
             use_http1: false,
             disable_matchkey_encryption: false,
         }
@@ -140,29 +233,72 @@ impl TestConfigBuilder {
         self
     }
 
-    #[must_use]
-    pub fn build(self) -> TestConfig {
-        let mut sockets = None;
-        let ports = self.ports.unwrap_or_else(|| {
-            let socks = array::from_fn(|_| TcpListener::bind("localhost:0").unwrap());
-            let ports = socks
-                .each_ref()
-                .map(|sock| sock.local_addr().unwrap().port());
-            sockets = Some(socks);
-            ports
+    /// Not using arrays since it makes the passing around harder
+    fn build_three(&self, optional_ports: Option<Vec<u16>>, ring_index: usize) -> Servers {
+        let mut sockets = vec![None, None, None];
+        let ports = optional_ports.unwrap_or_else(|| {
+            sockets = (0..3)
+                .map(|_| Some(TcpListener::bind("localhost:0").unwrap()))
+                .collect();
+            sockets
+                .iter()
+                .map(|sock| sock.as_ref().unwrap().local_addr().unwrap().port())
+                .collect()
         });
-        let (scheme, certs) = if self.disable_https {
-            ("http", [None, None, None])
+        // Ports will always be defined after this. Socks only if there were no ports set.
+        let configs = if self.disable_https {
+            ports
+                .into_iter()
+                .map(|ports| server_config_insecure_http(ports, !self.disable_matchkey_encryption))
+                .collect()
         } else {
-            ("https", TEST_CERTS_DER.clone().map(Some))
+            let start_idx = ring_index * 3;
+            (start_idx..start_idx + 3)
+                .map(|id| server_config_https(id, ports[id], !self.disable_matchkey_encryption))
+                .collect()
         };
-        let peers = certs
-            .into_iter()
-            .enumerate()
-            .map(|(i, cert)| PeerConfig {
-                url: format!("{scheme}://localhost:{}", ports[i])
-                    .parse()
-                    .unwrap(),
+        Servers::new(configs, sockets)
+    }
+
+    fn build_ring_network(
+        &self,
+        servers: Servers,
+        scheme: &str,
+        certs: Vec<Option<CertificateDer<'static>>>,
+    ) -> RestrictedNetwork<Ring> {
+        let (peers, client_config) = self.build_network(&servers, scheme, certs);
+        let network = NetworkConfig::<Ring>::new_ring(peers, client_config);
+        RestrictedNetwork { network, servers }
+    }
+
+    fn build_shard_network(
+        &self,
+        servers: Servers,
+        scheme: &str,
+        certs: Vec<Option<CertificateDer<'static>>>,
+    ) -> RestrictedNetwork<Sharding> {
+        let (peers, client_config) = self.build_network(&servers, scheme, certs);
+        let network = NetworkConfig::<Sharding>::new_shards(peers, client_config);
+        RestrictedNetwork { network, servers }
+    }
+
+    fn build_network(
+        &self,
+        servers: &Servers,
+        scheme: &str,
+        certs: Vec<Option<CertificateDer<'static>>>,
+    ) -> (Vec<PeerConfig>, ClientConfig) {
+        let peers = zip(servers.configs.iter(), certs)
+            .map(|(add_server, cert)| PeerConfig {
+                url: format!(
+                    "{scheme}://localhost:{}",
+                    add_server
+                        .config
+                        .port
+                        .expect("Port should have been defined by build_three")
+                )
+                .parse()
+                .unwrap(),
                 certificate: cert,
                 hpke_config: if self.disable_matchkey_encryption {
                     None
@@ -176,23 +312,54 @@ impl TestConfigBuilder {
                 },
             })
             .collect::<Vec<_>>();
-        let network = NetworkConfig::<Ring>::new_ring(
+        (
             peers,
             self.use_http1
                 .then(ClientConfig::use_http1)
                 .unwrap_or_default(),
-        );
-        let servers = if self.disable_https {
-            ports.map(|ports| server_config_insecure_http(ports, !self.disable_matchkey_encryption))
-        } else {
-            HelperIdentity::make_three()
-                .map(|id| server_config_https(id, ports[id], !self.disable_matchkey_encryption))
-        };
-        TestConfig {
-            network,
-            servers,
-            sockets,
+        )
+    }
+
+    #[must_use]
+    pub fn build(self) -> ShardedConfig {
+        // first we build all the rings and then we connect all the shards
+        let mut sharding_networks_shards =
+            vec![Servers::default(), Servers::default(), Servers::default()];
+        let mut rings: Vec<RestrictedNetwork<Ring>> = vec![];
+        let mut sharding_networks: Vec<RestrictedNetwork<Sharding>> = vec![];
+        for s in 0..self.sharding_factor {
+            let ring_ports = self.ports_by_ring.get(s).map(|p| p.ring.clone());
+            let shards_ports = self.ports_by_ring.get(s).map(|p| p.sharding.clone());
+
+            // We create the servers in the MPC ring and connect them.
+            let ring_servers = self.build_three(ring_ports, s);
+            let (scheme, certs) = if self.disable_https {
+                ("http", [None, None, None])
+            } else {
+                ("https", get_certs_der_row(s))
+            };
+            let ring_network = self.build_ring_network(ring_servers, scheme, certs.to_vec());
+            rings.push(ring_network);
+
+            // We create the sharding servers and accumulate them but don't connect them yet
+            let shard_servers = self.build_three(shards_ports, s);
+            for (i, s) in shard_servers.configs.into_iter().enumerate() {
+                sharding_networks_shards[i].push_shard(s);
+            }
+        }
+        for (i, s) in sharding_networks_shards.into_iter().enumerate() {
+            let (scheme, certs) = if self.disable_https {
+                ("http", repeat_n(None, self.sharding_factor).collect())
+            } else {
+                ("https", get_certs_der_col(i).to_vec())
+            };
+            sharding_networks.push(self.build_shard_network(s, scheme, certs));
+        }
+
+        ShardedConfig {
             disable_https: self.disable_https,
+            rings,
+            sharding_networks,
         }
     }
 }
@@ -200,12 +367,12 @@ impl TestConfigBuilder {
 pub struct TestServer {
     pub addr: SocketAddr,
     pub handle: IpaJoinHandle<()>,
-    pub transport: Arc<HttpTransport>,
+    pub transport: MpcHttpTransport,
     pub server: MpcHelperServer<Ring>,
     pub client: MpcHelperClient,
-    pub request_handler: Option<Arc<dyn RequestHandler<Identity = HelperIdentity>>>,
+    pub request_handler: Option<Arc<dyn RequestHandler<HelperIdentity>>>,
 }
-
+/// Test for ring interactions
 impl TestServer {
     /// Build default set of test clients
     ///
@@ -224,7 +391,7 @@ impl TestServer {
 
 #[derive(Default)]
 pub struct TestServerBuilder {
-    handler: Option<Arc<dyn RequestHandler<Identity = HelperIdentity>>>,
+    handler: Option<Arc<dyn RequestHandler<HelperIdentity>>>,
     metrics: Option<MetricsHandle>,
     disable_https: bool,
     use_http1: bool,
@@ -235,7 +402,7 @@ impl TestServerBuilder {
     #[must_use]
     pub fn with_request_handler(
         mut self,
-        handler: Arc<dyn RequestHandler<Identity = HelperIdentity>>,
+        handler: Arc<dyn RequestHandler<HelperIdentity>>,
     ) -> Self {
         self.handler = Some(handler);
         self
@@ -270,42 +437,31 @@ impl TestServerBuilder {
     }
 
     pub async fn build(self) -> TestServer {
-        let identity = if self.disable_https {
-            ClientIdentity::Header(HelperIdentity::ONE)
-        } else {
-            get_test_identity(HelperIdentity::ONE)
-        };
-        let test_config = TestConfig::builder()
+        let identities = create_ids(self.disable_https, HelperIdentity::ONE, ShardIndex::FIRST);
+        let mut test_config = ShardedConfig::builder()
             .with_disable_https_option(self.disable_https)
             .with_use_http1_option(self.use_http1)
             // TODO: add disble_matchkey here
             .build();
-        let TestConfig {
-            network: network_config,
-            servers: [server_config, _, _],
-            sockets: Some([server_socket, _, _]),
-            ..
-        } = test_config
-        else {
-            panic!("TestConfig should have allocated ports");
-        };
+        let leaders_ring = test_config.rings.pop().unwrap();
+        let first_server = leaders_ring.servers.configs.into_iter().next().unwrap();
         let clients = MpcHelperClient::from_conf(
             &IpaRuntime::current(),
-            &network_config,
-            &identity.clone_with_key(),
+            &leaders_ring.network,
+            &identities.helper.clone_with_key(),
         );
         let handler = self.handler.as_ref().map(HandlerBox::owning_ref);
         let client = clients[0].clone();
-        let (transport, server) = HttpTransport::new(
+        let (transport, server) = MpcHttpTransport::new(
             IpaRuntime::current(),
             HelperIdentity::ONE,
-            server_config,
-            network_config.clone(),
+            first_server.config,
+            leaders_ring.network.clone(),
             clients,
             handler,
         );
         let (addr, handle) = server
-            .start_on(&IpaRuntime::current(), Some(server_socket), self.metrics)
+            .start_on(&IpaRuntime::current(), first_server.socket, self.metrics)
             .await;
         TestServer {
             addr,
@@ -318,17 +474,32 @@ impl TestServerBuilder {
     }
 }
 
-fn get_test_certificate_and_key(id: HelperIdentity) -> (&'static [u8], &'static [u8]) {
+#[must_use]
+pub fn create_ids(disable_https: bool, id: HelperIdentity, ix: ShardIndex) -> ClientIdentities {
+    if disable_https {
+        ClientIdentities::new_headers(id, ix)
+    } else {
+        get_client_test_identity(id, ix)
+    }
+}
+
+fn get_test_certificate_and_key(id: usize) -> (&'static [u8], &'static [u8]) {
     (TEST_CERTS[id], TEST_KEYS[id])
 }
 
 #[must_use]
-pub fn get_test_identity(id: HelperIdentity) -> ClientIdentity {
-    let (mut certificate, mut private_key) = get_test_certificate_and_key(id);
-    ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap()
+pub fn get_client_test_identity(id: HelperIdentity, ix: ShardIndex) -> ClientIdentities {
+    let col: usize = usize::from(id) - 1;
+    let row: usize = usize::from(ix);
+    let (mut certificate, mut private_key) = get_test_certificate_and_key(row * 3 + col);
+    let (mut scertificate, mut sprivate_key) = get_test_certificate_and_key(row * 3 + col);
+    ClientIdentities {
+        helper: ClientIdentity::from_pkcs8(&mut certificate, &mut private_key).unwrap(),
+        shard: ClientIdentity::from_pkcs8(&mut scertificate, &mut sprivate_key).unwrap(),
+    }
 }
 
-pub const TEST_CERTS: [&[u8]; 3] = [
+pub const TEST_CERTS: [&[u8]; 6] = [
     b"\
 -----BEGIN CERTIFICATE-----
 MIIBZjCCAQ2gAwIBAgIIGGCAUnB4cZcwCgYIKoZIzj0EAwIwFDESMBAGA1UEAwwJ
@@ -365,13 +536,61 @@ AgNHADBEAiB+K2yadiLIDR7ZvDpyMIXP70gL3CXp7JmVmh8ygFtbjQIgU16wnFBy
 jn+NXYPeKEWnkCcVKjFED6MevGnOgrJylgY=
 -----END CERTIFICATE-----
 ",
+    b"
+-----BEGIN CERTIFICATE-----
+MIIBZDCCAQugAwIBAgIIFeKzq6ypfYgwCgYIKoZIzj0EAwIwFDESMBAGA1UEAwwJ
+bG9jYWxob3N0MB4XDTI0MTAwNjIyMTEzOFoXDTI1MDEwNTIyMTEzOFowFDESMBAG
+A1UEAwwJbG9jYWxob3N0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECKdJUHmm
+Mmqtvhu4PpWwwZnu+LFjaE8Y9guDNIXN+O9kulFl1hLVMx6WLpoScrLYlvHrQvcq
+/BTG24EOKAeaRqNHMEUwFAYDVR0RBA0wC4IJbG9jYWxob3N0MA4GA1UdDwEB/wQE
+AwICpDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwCgYIKoZIzj0EAwID
+RwAwRAIgBO2SBoLmPikfcovOFpjA8jpY+JuSybeISUKD2GAsXQICIEChXm7/UJ7p
+86qXEVsjN2N1pyRd6rUNxLyCaV87ZmfS
+-----END CERTIFICATE-----
+",
+    b"
+-----BEGIN CERTIFICATE-----
+MIIBZTCCAQugAwIBAgIIXTgB/bkN/aUwCgYIKoZIzj0EAwIwFDESMBAGA1UEAwwJ
+bG9jYWxob3N0MB4XDTI0MTAwNjIyMTIwM1oXDTI1MDEwNTIyMTIwM1owFDESMBAG
+A1UEAwwJbG9jYWxob3N0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyzSofZIX
+XgLUKGumrN3SEXOMOAKXcl1VshTBzvyVwxxnD01WVLgS80/TELEltT8SMj1Cgu7I
+tkDx3EVPjq4pOKNHMEUwFAYDVR0RBA0wC4IJbG9jYWxob3N0MA4GA1UdDwEB/wQE
+AwICpDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwCgYIKoZIzj0EAwID
+SAAwRQIhAN93g0zfB/4VyhNOaY1uCb4af4qMxcz1wp0yZ7HKAyWqAiBVPgv4X7aR
+JMepVZwIWJrVhnxdcmzOuONoeLZPZraFpw==
+-----END CERTIFICATE-----
+",
+    b"
+-----BEGIN CERTIFICATE-----
+MIIBZTCCAQugAwIBAgIIXTgB/bkN/aUwCgYIKoZIzj0EAwIwFDESMBAGA1UEAwwJ
+bG9jYWxob3N0MB4XDTI0MTAwNjIyMTIwM1oXDTI1MDEwNTIyMTIwM1owFDESMBAG
+A1UEAwwJbG9jYWxob3N0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyzSofZIX
+XgLUKGumrN3SEXOMOAKXcl1VshTBzvyVwxxnD01WVLgS80/TELEltT8SMj1Cgu7I
+tkDx3EVPjq4pOKNHMEUwFAYDVR0RBA0wC4IJbG9jYWxob3N0MA4GA1UdDwEB/wQE
+AwICpDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwCgYIKoZIzj0EAwID
+SAAwRQIhAN93g0zfB/4VyhNOaY1uCb4af4qMxcz1wp0yZ7HKAyWqAiBVPgv4X7aR
+JMepVZwIWJrVhnxdcmzOuONoeLZPZraFpw==
+-----END CERTIFICATE-----
+",
 ];
 
-pub static TEST_CERTS_DER: Lazy<[CertificateDer; 3]> = Lazy::new(|| {
+pub static TEST_CERTS_DER: Lazy<[CertificateDer; 6]> = Lazy::new(|| {
     TEST_CERTS.map(|mut pem| rustls_pemfile::certs(&mut pem).flatten().next().unwrap())
 });
 
-pub const TEST_KEYS: [&[u8]; 3] = [
+#[must_use]
+pub fn get_certs_der_row(ring_index: usize) -> [Option<CertificateDer<'static>>; 3] {
+    let r: [usize; 3] = array::from_fn(|i| i + ring_index * 3);
+    r.map(|i| Some(TEST_CERTS_DER[i].clone()))
+}
+
+#[must_use]
+pub fn get_certs_der_col(helper: usize) -> [Option<CertificateDer<'static>>; 2] {
+    let r: [usize; 2] = array::from_fn(|i| i * 3 + helper);
+    r.map(|i| Some(TEST_CERTS_DER[i].clone()))
+}
+
+pub const TEST_KEYS: [&[u8]; 6] = [
     b"\
 -----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgHmPeGcv6Dy9QWPHD
@@ -391,6 +610,27 @@ ESxMP7GWIuJinNoJCKOUw2pVqJTHp86sk6BHTD3EULlYJ2fjKR/ogsZP
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgDfOsXGbO9T6e9mPb
 u9BeVKo7j/DyX4j3XcqrOYnIwOOhRANCAASEORA/IDvqRGiJpddoyocRa+9HEG2B
 6P8vfTTV28Ph7n9YBgJodGd29Kt7Dy2IdCjy7PsOik5KGZ4Ee+a+juKk
+-----END PRIVATE KEY-----
+",
+    b"\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgWlbBJGC40HwzwMsd
+3a6o6x75HZgRnktVwBoi6/84nPmhRANCAAQIp0lQeaYyaq2+G7g+lbDBme74sWNo
+Txj2C4M0hc3472S6UWXWEtUzHpYumhJystiW8etC9yr8FMbbgQ4oB5pG
+-----END PRIVATE KEY-----
+",
+    b"\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgi9TsF4lX49P+GIER
+DjyUhMiyRZ52EsD00dGPRA4XJbahRANCAATLNKh9khdeAtQoa6as3dIRc4w4Apdy
+XVWyFMHO/JXDHGcPTVZUuBLzT9MQsSW1PxIyPUKC7si2QPHcRU+Orik4
+-----END PRIVATE KEY-----
+",
+    b"\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgs8cH8I4hrdrqDN/d
+p1HENqJEFXMwcERH5JFyW/B6D/ChRANCAAT+nXv66H0vd2omUjYwWDYbGkIiGc6S
+jzcyiSIULkaelVYvnEQBYefjGLQwvwbifmMrQ+hfQUT9FNbGRQ788pK9
 -----END PRIVATE KEY-----
 ",
 ];

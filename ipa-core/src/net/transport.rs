@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    collections::HashMap,
     future::Future,
     pin::Pin,
     task::{Context, Poll},
@@ -21,25 +22,31 @@ use crate::{
     },
     net::{client::MpcHelperClient, error::Error, MpcHelperServer},
     protocol::{Gate, QueryId},
-    sharding::{Ring, ShardIndex},
+    sharding::{Ring, ShardIndex, Sharding, TransportRestriction},
     sync::Arc,
 };
 
-/// HTTP transport for IPA helper service.
-/// TODO: rename to MPC
-pub struct HttpTransport {
+/// Shared implementation used by [`MpcHttpTransport`] and [`ShardHttpTransport`]
+pub struct HttpTransport<R: TransportRestriction> {
     http_runtime: IpaRuntime,
-    identity: HelperIdentity,
-    clients: [MpcHelperClient; 3],
-    // TODO(615): supporting multiple queries likely require a hashmap here. It will be ok if we
-    // only allow one query at a time.
-    record_streams: StreamCollection<HelperIdentity, BodyStream>,
-    handler: Option<HandlerRef>,
+    identity: R::Identity,
+    clients: HashMap<R::Identity, MpcHelperClient<R>>,
+    record_streams: StreamCollection<R::Identity, BodyStream>,
+    handler: Option<HandlerRef<R::Identity>>,
 }
 
-/// A stub for HTTP transport implementation, suitable for serviing inter-shard traffic
-#[derive(Clone, Default)]
-pub struct HttpShardTransport;
+/// HTTP transport for helper to helper traffic.
+#[derive(Clone)]
+pub struct MpcHttpTransport {
+    inner_transport: Arc<HttpTransport<Ring>>,
+}
+
+/// A stub for HTTP transport implementation, suitable for serving inter-shard traffic
+#[derive(Clone)]
+pub struct ShardHttpTransport {
+    #[allow(dead_code)]
+    inner_transport: Arc<HttpTransport<Sharding>>,
+}
 
 impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
     type Params = String;
@@ -61,35 +68,68 @@ impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
     }
 }
 
-impl HttpTransport {
-    #[must_use]
-    pub fn new(
-        runtime: IpaRuntime,
-        identity: HelperIdentity,
-        server_config: ServerConfig,
-        network_config: NetworkConfig<Ring>,
-        clients: [MpcHelperClient; 3],
-        handler: Option<HandlerRef>,
-    ) -> (Arc<Self>, MpcHelperServer<Ring>) {
-        let transport = Self::new_internal(runtime, identity, clients, handler);
-        let server =
-            MpcHelperServer::new_ring(Arc::clone(&transport), server_config, network_config);
-        (transport, server)
+impl<TR: TransportRestriction> HttpTransport<TR> {
+    async fn send<
+        D: Stream<Item = Vec<u8>> + Send + 'static,
+        Q: QueryIdBinding,
+        S: StepBinding,
+        R: RouteParams<RouteId, Q, S>,
+    >(
+        &self,
+        dest: TR::Identity,
+        route: R,
+        data: D,
+    ) -> Result<(), Error>
+    where
+        Option<QueryId>: From<Q>,
+        Option<Gate>: From<S>,
+    {
+        let route_id = route.resource_identifier();
+        match route_id {
+            RouteId::Records => {
+                // TODO(600): These fallible extractions aren't really necessary.
+                let query_id = <Option<QueryId>>::from(route.query_id())
+                    .expect("query_id required when sending records");
+                let step =
+                    <Option<Gate>>::from(route.gate()).expect("step required when sending records");
+                let resp_future = self.clients[&dest].step(query_id, &step, data)?;
+                // Use a dedicated HTTP runtime to poll this future for several reasons:
+                // - avoid blocking this task, if the current runtime is overloaded
+                // - use the runtime that enables IO (current runtime may not).
+                self.http_runtime
+                    .spawn(
+                        resp_future
+                            .map_err(Into::into)
+                            .and_then(MpcHelperClient::<TR>::resp_ok),
+                    )
+                    .await?;
+                Ok(())
+            }
+            RouteId::PrepareQuery => {
+                let req = serde_json::from_str(route.extra().borrow()).unwrap();
+                self.clients[&dest].prepare_query(req).await
+            }
+            evt @ (RouteId::QueryInput
+            | RouteId::ReceiveQuery
+            | RouteId::QueryStatus
+            | RouteId::CompleteQuery
+            | RouteId::KillQuery) => {
+                unimplemented!(
+                    "attempting to send client-specific request {evt:?} to another helper"
+                )
+            }
+        }
     }
 
-    fn new_internal(
-        runtime: IpaRuntime,
-        identity: HelperIdentity,
-        clients: [MpcHelperClient; 3],
-        handler: Option<HandlerRef>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            http_runtime: runtime,
-            identity,
-            clients,
-            handler,
-            record_streams: StreamCollection::default(),
-        })
+    fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
+        &self,
+        from: TR::Identity,
+        route: &R,
+    ) -> ReceiveRecords<TR::Identity, BodyStream> {
+        ReceiveRecords::new(
+            (route.query_id(), from, route.gate()),
+            self.record_streams.clone(),
+        )
     }
 
     /// Dispatches the given request to the [`RequestHandler`] connected to this transport.
@@ -113,13 +153,13 @@ impl HttpTransport {
         /// This implementation is a poor man's safety net and only works because we run
         /// one query at a time and don't use query identifiers.
         #[pin_project(PinnedDrop)]
-        struct ClearOnDrop<F: Future> {
-            transport: Arc<HttpTransport>,
+        struct ClearOnDrop<TR: TransportRestriction, F: Future> {
+            transport: Arc<HttpTransport<TR>>,
             #[pin]
             inner: F,
         }
 
-        impl<F: Future> Future for ClearOnDrop<F> {
+        impl<TR: TransportRestriction, F: Future> Future for ClearOnDrop<TR, F> {
             type Output = F::Output;
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -128,7 +168,7 @@ impl HttpTransport {
         }
 
         #[pinned_drop]
-        impl<F: Future> PinnedDrop for ClearOnDrop<F> {
+        impl<TR: TransportRestriction, F: Future> PinnedDrop for ClearOnDrop<TR, F> {
             fn drop(self: Pin<&mut Self>) {
                 self.transport.record_streams.clear();
             }
@@ -151,30 +191,87 @@ impl HttpTransport {
             r.await
         }
     }
+}
 
-    /// Connect an inbound stream of MPC record data.
+impl MpcHttpTransport {
+    #[must_use]
+    pub fn new(
+        http_runtime: IpaRuntime,
+        identity: HelperIdentity,
+        server_config: ServerConfig,
+        network_config: NetworkConfig<Ring>,
+        clients: [MpcHelperClient; 3],
+        handler: Option<HandlerRef<HelperIdentity>>,
+    ) -> (Self, MpcHelperServer<Ring>) {
+        let transport = Self::new_internal(http_runtime, identity, clients, handler);
+        let server = MpcHelperServer::new_ring(&transport, server_config, network_config);
+        (transport, server)
+    }
+
+    fn new_internal(
+        http_runtime: IpaRuntime,
+        identity: HelperIdentity,
+        clients: [MpcHelperClient; 3],
+        handler: Option<HandlerRef<HelperIdentity>>,
+    ) -> Self {
+        let mut id_clients = HashMap::new();
+        let [c1, c2, c3] = clients;
+        id_clients.insert(HelperIdentity::ONE, c1);
+        id_clients.insert(HelperIdentity::TWO, c2);
+        id_clients.insert(HelperIdentity::THREE, c3);
+        Self {
+            inner_transport: Arc::new(HttpTransport {
+                http_runtime,
+                identity,
+                clients: id_clients,
+                handler,
+                record_streams: StreamCollection::default(),
+            }),
+        }
+    }
+
+    /// Connect an inbound stream of record data.
     ///
     /// This is called by peer helpers via the HTTP server.
     pub fn receive_stream(
-        self: Arc<Self>,
+        self,
         query_id: QueryId,
         gate: Gate,
         from: HelperIdentity,
         stream: BodyStream,
     ) {
-        self.record_streams
+        self.inner_transport
+            .record_streams
             .add_stream((query_id, from, gate), stream);
+    }
+
+    /// Dispatches the given request to the [`RequestHandler`] connected to this transport.
+    ///
+    /// ## Errors
+    /// Returns an error, if handler rejects the request for any reason.
+    ///
+    /// ## Panics
+    /// This will panic if request handler hasn't been previously set for this transport.
+    pub async fn dispatch<Q: QueryIdBinding, R: RouteParams<RouteId, Q, NoStep>>(
+        self,
+        req: R,
+        body: BodyStream,
+    ) -> Result<HelperResponse, ApiError>
+    where
+        Option<QueryId>: From<Q>,
+    {
+        self.inner_transport.dispatch(req, body).await
     }
 }
 
 #[async_trait]
-impl Transport for Arc<HttpTransport> {
+impl Transport for MpcHttpTransport {
     type Identity = HelperIdentity;
-    type RecordsStream = ReceiveRecords<HelperIdentity, BodyStream>;
+    type RecordsStream = ReceiveRecords<Self::Identity, BodyStream>;
     type Error = Error;
 
-    fn identity(&self) -> HelperIdentity {
-        self.identity
+    fn identity(&self) -> Self::Identity {
+        self.inner_transport.identity
     }
 
     async fn send<
@@ -184,7 +281,7 @@ impl Transport for Arc<HttpTransport> {
         R: RouteParams<RouteId, Q, S>,
     >(
         &self,
-        dest: HelperIdentity,
+        dest: Self::Identity,
         route: R,
         data: D,
     ) -> Result<(), Error>
@@ -192,71 +289,70 @@ impl Transport for Arc<HttpTransport> {
         Option<QueryId>: From<Q>,
         Option<Gate>: From<S>,
     {
-        let route_id = route.resource_identifier();
-        match route_id {
-            RouteId::Records => {
-                // TODO(600): These fallible extractions aren't really necessary.
-                let query_id = <Option<QueryId>>::from(route.query_id())
-                    .expect("query_id required when sending records");
-                let step =
-                    <Option<Gate>>::from(route.gate()).expect("step required when sending records");
-                let resp_future = self.clients[dest].step(query_id, &step, data)?;
-
-                // Use a dedicated HTTP runtime to poll this future for several reasons:
-                // - avoid blocking this task, if the current runtime is overloaded
-                // - use the runtime that enables IO (current runtime may not).
-                self.http_runtime
-                    .spawn(
-                        resp_future
-                            .map_err(Into::into)
-                            .and_then(MpcHelperClient::<Ring>::resp_ok),
-                    )
-                    .await?;
-                Ok(())
-            }
-            RouteId::PrepareQuery => {
-                let req = serde_json::from_str(route.extra().borrow()).unwrap();
-                self.clients[dest].prepare_query(req).await
-            }
-            evt @ (RouteId::QueryInput
-            | RouteId::ReceiveQuery
-            | RouteId::QueryStatus
-            | RouteId::CompleteQuery
-            | RouteId::KillQuery) => {
-                unimplemented!(
-                    "attempting to send client-specific request {evt:?} to another helper"
-                )
-            }
-        }
+        self.inner_transport.send(dest, route, data).await
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
         &self,
-        from: HelperIdentity,
+        from: Self::Identity,
         route: R,
     ) -> Self::RecordsStream {
-        ReceiveRecords::new(
-            (route.query_id(), from, route.gate()),
-            self.record_streams.clone(),
-        )
+        self.inner_transport.receive(from, &route)
+    }
+}
+
+impl ShardHttpTransport {
+    #[must_use]
+    pub fn new(
+        http_runtime: IpaRuntime,
+        identity: ShardIndex,
+        server_config: ServerConfig,
+        network_config: NetworkConfig<Sharding>,
+        clients: HashMap<ShardIndex, MpcHelperClient<Sharding>>,
+        handler: Option<HandlerRef<ShardIndex>>,
+    ) -> (Self, MpcHelperServer<Sharding>) {
+        let transport = Self::new_internal(http_runtime, identity, clients, handler);
+        let server = MpcHelperServer::new_shards(&transport, server_config, network_config);
+        (transport, server)
+    }
+
+    fn new_internal(
+        http_runtime: IpaRuntime,
+        identity: ShardIndex,
+        clients: HashMap<ShardIndex, MpcHelperClient<Sharding>>,
+        handler: Option<HandlerRef<ShardIndex>>,
+    ) -> Self {
+        let mut base_clients = HashMap::new();
+        for (ix, client) in clients {
+            base_clients.insert(ix, client);
+        }
+        Self {
+            inner_transport: Arc::new(HttpTransport {
+                http_runtime,
+                identity,
+                clients: base_clients,
+                handler,
+                record_streams: StreamCollection::default(),
+            }),
+        }
     }
 }
 
 #[async_trait]
-impl Transport for HttpShardTransport {
+impl Transport for ShardHttpTransport {
     type Identity = ShardIndex;
     type RecordsStream = ReceiveRecords<ShardIndex, BodyStream>;
-    type Error = ();
+    type Error = Error;
 
     fn identity(&self) -> Self::Identity {
-        unimplemented!()
+        self.inner_transport.identity
     }
 
     async fn send<D, Q, S, R>(
         &self,
-        _dest: Self::Identity,
-        _route: R,
-        _data: D,
+        dest: Self::Identity,
+        route: R,
+        data: D,
     ) -> Result<(), Self::Error>
     where
         Option<QueryId>: From<Q>,
@@ -266,21 +362,21 @@ impl Transport for HttpShardTransport {
         R: RouteParams<RouteId, Q, S>,
         D: Stream<Item = Vec<u8>> + Send + 'static,
     {
-        unimplemented!()
+        self.inner_transport.send(dest, route, data).await
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
         &self,
-        _from: Self::Identity,
-        _route: R,
+        from: Self::Identity,
+        route: R,
     ) -> Self::RecordsStream {
-        unimplemented!()
+        self.inner_transport.receive(from, &route)
     }
 }
 
 #[cfg(all(test, web_test, descriptive_gate))]
 mod tests {
-    use std::{iter::zip, net::TcpListener, task::Poll};
+    use std::{iter::zip, task::Poll};
 
     use bytes::Bytes;
     use futures::stream::{poll_immediate, StreamExt};
@@ -293,7 +389,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{NetworkConfig, ServerConfig},
         ff::{FieldType, Fp31, Serializable},
         helpers::{
             make_owned_handler,
@@ -301,7 +396,7 @@ mod tests {
         },
         net::{
             client::ClientIdentity,
-            test::{get_test_identity, TestConfig, TestConfigBuilder, TestServer},
+            test::{create_ids, ShardedConfig, TestConfigBuilder, TestServer},
         },
         secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares},
         test_fixture::Reconstruct,
@@ -322,18 +417,18 @@ mod tests {
             .build()
             .await;
 
-        transport.record_streams.add_stream(
+        transport.inner_transport.record_streams.add_stream(
             (QueryId, HelperIdentity::ONE, Gate::default()),
             BodyStream::empty(),
         );
-        assert_eq!(1, transport.record_streams.len());
+        assert_eq!(1, transport.inner_transport.record_streams.len());
 
         Transport::clone_ref(&transport)
             .dispatch((RouteId::KillQuery, QueryId), BodyStream::empty())
             .await
             .unwrap();
 
-        assert!(transport.record_streams.is_empty());
+        assert!(transport.inner_transport.record_streams.is_empty());
     }
 
     #[tokio::test]
@@ -347,10 +442,12 @@ mod tests {
         let body = BodyStream::from_bytes_stream(ReceiverStream::new(rx));
 
         // Register the stream with the transport (normally called by step data HTTP API handler)
-        Arc::clone(&transport).receive_stream(QueryId, STEP.clone(), HelperIdentity::TWO, body);
+        transport
+            .clone()
+            .receive_stream(QueryId, STEP.clone(), HelperIdentity::TWO, body);
 
         // Request step data reception (normally called by protocol)
-        let mut stream = Arc::clone(&transport)
+        let mut stream = transport
             .receive(HelperIdentity::TWO, (QueryId, STEP.clone()))
             .into_bytes_stream();
 
@@ -378,40 +475,62 @@ mod tests {
     }
 
     // TODO(651): write a test for an error while reading the body (after error handling is finalized)
-
-    async fn make_helpers(
-        sockets: [TcpListener; 3],
-        server_config: [ServerConfig; 3],
-        network_config: &NetworkConfig<Ring>,
-        disable_https: bool,
-    ) -> [HelperApp; 3] {
+    async fn make_helpers(mut conf: ShardedConfig) -> [HelperApp; 3] {
+        let leaders_ring = conf.rings.pop().unwrap();
         join_all(
-            zip(HelperIdentity::make_three(), zip(sockets, server_config)).map(
-                |(id, (socket, server_config))| async move {
-                    let identity = if disable_https {
-                        ClientIdentity::Header(id)
-                    } else {
-                        get_test_identity(id)
-                    };
-                    let (setup, handler) = AppSetup::new(AppConfig::default());
+            zip(HelperIdentity::make_three(), leaders_ring.servers.configs).map(
+                |(id, mut addr_server)| {
+                    let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
+                    let shard_ix = ShardIndex::FIRST;
+                    let identities = create_ids(conf.disable_https, id, shard_ix);
+
+                    // Ring config
                     let clients = MpcHelperClient::from_conf(
                         &IpaRuntime::current(),
-                        network_config,
-                        &identity,
+                        &leaders_ring.network,
+                        &identities.helper,
                     );
-                    let (transport, server) = HttpTransport::new(
+                    let (transport, server) = MpcHttpTransport::new(
                         IpaRuntime::current(),
                         id,
-                        server_config,
-                        network_config.clone(),
+                        addr_server.config.clone(),
+                        leaders_ring.network.clone(),
                         clients,
-                        Some(handler),
+                        Some(mpc_handler),
                     );
-                    server
-                        .start_on(&IpaRuntime::current(), Some(socket), ())
-                        .await;
 
-                    setup.connect(transport, HttpShardTransport)
+                    // Shard Config
+                    let helper_shards = conf.get_shards_for_helper(id);
+                    let addr_shard = helper_shards.get_first_shard();
+                    let shard_network_config = helper_shards.network.clone();
+                    let shard_clients = MpcHelperClient::<Sharding>::shards_from_conf(
+                        &IpaRuntime::current(),
+                        &shard_network_config,
+                        &identities.shard,
+                    );
+                    let (shard_transport, shard_server) = ShardHttpTransport::new(
+                        IpaRuntime::current(),
+                        shard_ix,
+                        addr_shard.config.clone(),
+                        shard_network_config,
+                        shard_clients,
+                        Some(shard_handler),
+                    );
+
+                    let helper_shards = conf.get_shards_for_helper_mut(id);
+                    let addr_shard = helper_shards.get_first_shard_mut();
+                    let ring_socket = addr_server.socket.take();
+                    let sharding_socket = addr_shard.socket.take();
+
+                    async move {
+                        server
+                            .start_on(&IpaRuntime::current(), ring_socket, ())
+                            .await;
+                        shard_server
+                            .start_on(&IpaRuntime::current(), sharding_socket, ())
+                            .await;
+                        setup.connect(transport, shard_transport)
+                    }
                 },
             ),
         )
@@ -421,38 +540,25 @@ mod tests {
         .unwrap()
     }
 
-    async fn test_three_helpers(mut conf: TestConfig) {
+    async fn test_three_helpers(conf: ShardedConfig) {
         let clients = MpcHelperClient::from_conf(
             &IpaRuntime::current(),
-            &conf.network,
+            &conf.leaders_ring().network,
             &ClientIdentity::None,
         );
-        let _helpers = make_helpers(
-            conf.sockets.take().unwrap(),
-            conf.servers,
-            &conf.network,
-            conf.disable_https,
-        )
-        .await;
-
+        let _helpers = make_helpers(conf).await;
         test_multiply(&clients).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn happy_case_twice() {
-        let mut conf = TestConfigBuilder::with_open_ports().build();
+        let conf = TestConfigBuilder::default().build();
         let clients = MpcHelperClient::from_conf(
             &IpaRuntime::current(),
-            &conf.network,
+            &conf.leaders_ring().network,
             &ClientIdentity::None,
         );
-        let _helpers = make_helpers(
-            conf.sockets.take().unwrap(),
-            conf.servers,
-            &conf.network,
-            conf.disable_https,
-        )
-        .await;
+        let _helpers = make_helpers(conf).await;
 
         test_multiply(&clients).await;
         test_multiply(&clients).await;
@@ -502,7 +608,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn three_helpers_http() {
-        let conf = TestConfigBuilder::with_open_ports()
+        let conf = TestConfigBuilder::default()
             .with_disable_https_option(true)
             .build();
         test_three_helpers(conf).await;
@@ -510,7 +616,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn three_helpers_https() {
-        let conf = TestConfigBuilder::with_open_ports().build();
+        let conf = TestConfigBuilder::default().build();
         test_three_helpers(conf).await;
     }
 }
