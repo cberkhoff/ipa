@@ -6,6 +6,8 @@ mod results;
 mod status;
 mod step;
 
+use std::{marker::PhantomData, sync::Arc};
+
 use axum::{
     response::{IntoResponse, Response},
     Router,
@@ -18,8 +20,9 @@ use hyper::{Request, StatusCode};
 use tower::{layer::layer_fn, Service};
 
 use crate::{
-    helpers::HelperIdentity,
-    net::{server::ClientIdentity, MpcHttpTransport},
+    helpers::{HelperIdentity, TransportIdentity},
+    net::{server::ClientIdentity, MpcHttpTransport, ShardHttpTransport},
+    sharding::ShardIndex,
 };
 
 /// Construct router for IPA query web service
@@ -27,12 +30,12 @@ use crate::{
 /// In principle, this web service could be backed by either an HTTP-interconnected helper network or
 /// an in-memory helper network. These are the APIs used by external callers (report collectors) to
 /// examine attribution results.
-pub fn query_router(transport: MpcHttpTransport) -> Router {
+pub fn ring_query_router(transport: MpcHttpTransport) -> Router {
     Router::new()
         .merge(create::router(transport.clone()))
-        .merge(input::router(transport.clone()))
         .merge(status::router(transport.clone()))
         .merge(kill::router(transport.clone()))
+        .merge(input::router(transport.clone()))
         .merge(results::router(transport))
 }
 
@@ -45,9 +48,16 @@ pub fn query_router(transport: MpcHttpTransport) -> Router {
 // It might make sense to split the query and h2h handlers into two modules.
 pub fn h2h_router(transport: MpcHttpTransport) -> Router {
     Router::new()
-        .merge(prepare::router(transport.clone()))
-        .merge(step::router(transport))
-        .layer(layer_fn(HelperAuthentication::new))
+        .merge(prepare::router(Arc::clone(&transport.inner_transport)))
+        .merge(step::router(transport.inner_transport))
+        .layer(layer_fn(HelperAuthentication::<_, HelperIdentity>::new))
+}
+
+pub fn s2s_router(transport: ShardHttpTransport) -> Router {
+    Router::new()
+        .merge(prepare::router(Arc::clone(&transport.inner_transport)))
+        .merge(step::router(transport.inner_transport))
+        .layer(layer_fn(HelperAuthentication::<_, ShardIndex>::new))
 }
 
 /// Returns HTTP 401 Unauthorized if the request does not have valid authentication.
@@ -63,18 +73,24 @@ pub fn h2h_router(transport: MpcHttpTransport) -> Router {
 /// requests would not have this request extension, causing axum to fail the request with
 /// `ExtensionRejection::MissingExtension`, however, this would return a 500 error instead of 401.
 #[derive(Clone)]
-pub struct HelperAuthentication<S> {
+pub struct HelperAuthentication<S, I: TransportIdentity> {
+    _restriction: PhantomData<I>,
     inner: S,
 }
 
-impl<S> HelperAuthentication<S> {
+impl<S, I: TransportIdentity> HelperAuthentication<S, I> {
     fn new(inner: S) -> Self {
-        Self { inner }
+        Self {
+            _restriction: PhantomData,
+            inner,
+        }
     }
 }
 
-impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
-    for HelperAuthentication<S>
+impl<B, S, I> Service<Request<B>> for HelperAuthentication<S, I>
+where
+    S: Service<Request<B>, Response = Response>,
+    I: TransportIdentity,
 {
     type Response = Response;
     type Error = S::Error;
@@ -88,7 +104,7 @@ impl<B, S: Service<Request<B>, Response = Response>> Service<Request<B>>
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
-        match req.extensions().get::<ClientIdentity<HelperIdentity>>() {
+        match req.extensions().get::<ClientIdentity<I>>() {
             Some(ClientIdentity(_)) => self.inner.call(req).left_future(),
             None => ready(Ok((
                 StatusCode::UNAUTHORIZED,

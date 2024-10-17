@@ -38,14 +38,13 @@ pub struct HttpTransport<R: TransportRestriction> {
 /// HTTP transport for helper to helper traffic.
 #[derive(Clone)]
 pub struct MpcHttpTransport {
-    inner_transport: Arc<HttpTransport<Ring>>,
+    pub(super) inner_transport: Arc<HttpTransport<Ring>>,
 }
 
 /// A stub for HTTP transport implementation, suitable for serving inter-shard traffic
 #[derive(Clone)]
 pub struct ShardHttpTransport {
-    #[allow(dead_code)]
-    inner_transport: Arc<HttpTransport<Sharding>>,
+    pub(super) inner_transport: Arc<HttpTransport<Sharding>>,
 }
 
 impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
@@ -75,7 +74,7 @@ impl<TR: TransportRestriction> HttpTransport<TR> {
         S: StepBinding,
         R: RouteParams<RouteId, Q, S>,
     >(
-        &self,
+        self: Arc<Self>,
         dest: TR::Identity,
         route: R,
         data: D,
@@ -122,7 +121,7 @@ impl<TR: TransportRestriction> HttpTransport<TR> {
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
-        &self,
+        self: Arc<Self>,
         from: TR::Identity,
         route: &R,
     ) -> ReceiveRecords<TR::Identity, BodyStream> {
@@ -130,6 +129,20 @@ impl<TR: TransportRestriction> HttpTransport<TR> {
             (route.query_id(), from, route.gate()),
             self.record_streams.clone(),
         )
+    }
+
+    /// Connect an inbound stream of record data.
+    ///
+    /// This is called by peer helpers via the HTTP server.
+    pub fn receive_stream(
+        self: Arc<Self>,
+        query_id: QueryId,
+        gate: Gate,
+        from: TR::Identity,
+        stream: BodyStream,
+    ) {
+        self.record_streams
+            .add_stream((query_id, from, gate), stream);
     }
 
     /// Dispatches the given request to the [`RequestHandler`] connected to this transport.
@@ -230,28 +243,7 @@ impl MpcHttpTransport {
         }
     }
 
-    /// Connect an inbound stream of record data.
-    ///
-    /// This is called by peer helpers via the HTTP server.
-    pub fn receive_stream(
-        self,
-        query_id: QueryId,
-        gate: Gate,
-        from: HelperIdentity,
-        stream: BodyStream,
-    ) {
-        self.inner_transport
-            .record_streams
-            .add_stream((query_id, from, gate), stream);
-    }
-
-    /// Dispatches the given request to the [`RequestHandler`] connected to this transport.
-    ///
-    /// ## Errors
-    /// Returns an error, if handler rejects the request for any reason.
-    ///
-    /// ## Panics
-    /// This will panic if request handler hasn't been previously set for this transport.
+    /// Forwards the call to the inner transport.
     pub async fn dispatch<Q: QueryIdBinding, R: RouteParams<RouteId, Q, NoStep>>(
         self,
         req: R,
@@ -289,7 +281,8 @@ impl Transport for MpcHttpTransport {
         Option<QueryId>: From<Q>,
         Option<Gate>: From<S>,
     {
-        self.inner_transport.send(dest, route, data).await
+        let t = Arc::clone(&self.inner_transport);
+        t.send(dest, route, data).await
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
@@ -297,7 +290,8 @@ impl Transport for MpcHttpTransport {
         from: Self::Identity,
         route: R,
     ) -> Self::RecordsStream {
-        self.inner_transport.receive(from, &route)
+        let t = Arc::clone(&self.inner_transport);
+        t.receive(from, &route)
     }
 }
 
@@ -336,6 +330,24 @@ impl ShardHttpTransport {
             }),
         }
     }
+
+    /// Dispatches the given request to the [`RequestHandler`] connected to this transport.
+    ///
+    /// ## Errors
+    /// Returns an error, if handler rejects the request for any reason.
+    ///
+    /// ## Panics
+    /// This will panic if request handler hasn't been previously set for this transport.
+    pub async fn dispatch<Q: QueryIdBinding, R: RouteParams<RouteId, Q, NoStep>>(
+        self,
+        req: R,
+        body: BodyStream,
+    ) -> Result<HelperResponse, ApiError>
+    where
+        Option<QueryId>: From<Q>,
+    {
+        self.inner_transport.dispatch(req, body).await
+    }
 }
 
 #[async_trait]
@@ -362,7 +374,8 @@ impl Transport for ShardHttpTransport {
         R: RouteParams<RouteId, Q, S>,
         D: Stream<Item = Vec<u8>> + Send + 'static,
     {
-        self.inner_transport.send(dest, route, data).await
+        let t = Arc::clone(&self.inner_transport);
+        t.send(dest, route, data).await
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
@@ -370,7 +383,8 @@ impl Transport for ShardHttpTransport {
         from: Self::Identity,
         route: R,
     ) -> Self::RecordsStream {
-        self.inner_transport.receive(from, &route)
+        let t = Arc::clone(&self.inner_transport);
+        t.receive(from, &route)
     }
 }
 
@@ -442,9 +456,8 @@ mod tests {
         let body = BodyStream::from_bytes_stream(ReceiverStream::new(rx));
 
         // Register the stream with the transport (normally called by step data HTTP API handler)
-        transport
-            .clone()
-            .receive_stream(QueryId, STEP.clone(), HelperIdentity::TWO, body);
+        let t = Arc::clone(&transport.inner_transport);
+        t.receive_stream(QueryId, STEP.clone(), HelperIdentity::TWO, body);
 
         // Request step data reception (normally called by protocol)
         let mut stream = transport

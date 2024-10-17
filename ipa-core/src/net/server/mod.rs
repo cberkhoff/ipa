@@ -98,7 +98,7 @@ impl MpcHelperServer<Ring> {
         config: ServerConfig,
         network_config: NetworkConfig<Ring>,
     ) -> Self {
-        let router = handlers::router(transport.clone());
+        let router = handlers::ring_router(transport.clone());
         MpcHelperServer {
             config,
             network_config,
@@ -111,14 +111,15 @@ impl MpcHelperServer<Ring> {
 impl MpcHelperServer<Sharding> {
     #[must_use]
     pub fn new_shards(
-        _transport: &ShardHttpTransport,
+        transport: &ShardHttpTransport,
         config: ServerConfig,
         network_config: NetworkConfig<Sharding>,
     ) -> Self {
+        let router = handlers::shard_router(transport.clone());
         MpcHelperServer {
             config,
             network_config,
-            router: Router::new(),
+            router,
             id_header_layer: ClientIdentityFromHeaderLayer::new_shards(),
         }
     }

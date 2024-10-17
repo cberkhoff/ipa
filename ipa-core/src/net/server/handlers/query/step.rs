@@ -1,32 +1,34 @@
+use std::sync::Arc;
+
 use axum::{extract::Path, routing::post, Extension, Router};
 
 use crate::{
-    helpers::{BodyStream, HelperIdentity, Transport},
+    helpers::BodyStream,
     net::{
         http_serde,
         server::{ClientIdentity, Error},
-        MpcHttpTransport,
+        transport::HttpTransport,
     },
     protocol::{Gate, QueryId},
+    sharding::TransportRestriction,
 };
 
 #[allow(clippy::unused_async)] // axum doesn't like synchronous handler
 #[tracing::instrument(level = "trace", "step", skip_all, fields(from = ?**from, gate = ?gate))]
-async fn handler(
-    transport: Extension<MpcHttpTransport>,
-    from: Extension<ClientIdentity<HelperIdentity>>,
+async fn handler<R: TransportRestriction>(
+    transport: Extension<Arc<HttpTransport<R>>>,
+    from: Extension<ClientIdentity<R::Identity>>,
     Path((query_id, gate)): Path<(QueryId, Gate)>,
     body: BodyStream,
 ) -> Result<(), Error> {
-    transport
-        .clone_ref()
-        .receive_stream(query_id, gate, **from, body);
+    let transport = Arc::clone(&transport);
+    transport.receive_stream(query_id, gate, **from, body);
     Ok(())
 }
 
-pub fn router(transport: MpcHttpTransport) -> Router {
+pub fn router<R: TransportRestriction>(transport: Arc<HttpTransport<R>>) -> Router {
     Router::new()
-        .route(http_serde::query::step::AXUM_PATH, post(handler))
+        .route(http_serde::query::step::AXUM_PATH, post(handler::<R>))
         .layer(Extension(transport))
 }
 
@@ -41,7 +43,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        helpers::{HelperIdentity, MESSAGE_PAYLOAD_SIZE_BYTES},
+        helpers::{HelperIdentity, Transport, MESSAGE_PAYLOAD_SIZE_BYTES},
         net::{
             server::handlers::query::test_helpers::{assert_fails_with, MaybeExtensionExt},
             test::TestServer,
@@ -52,7 +54,7 @@ mod tests {
     const DATA_LEN: usize = 3;
 
     #[tokio::test]
-    async fn step() {
+    async fn mpc_step() {
         let payload = vec![213; DATA_LEN * MESSAGE_PAYLOAD_SIZE_BYTES];
         let req: OverrideReq = OverrideReq {
             payload: payload.clone(),
