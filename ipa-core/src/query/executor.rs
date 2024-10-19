@@ -108,7 +108,10 @@ pub fn execute<R: PrivateKeyRegistry>(
             config,
             gateway,
             input,
-            |_prss, _gateway, _config, _input| unimplemented!(),
+            move |prss, gateway, config, input| {
+                let ctx = SemiHonestContext::new_sharded(prss, gateway, shard_configuration);
+                unimplemented!()
+            },
         ),
         #[cfg(any(test, feature = "weak-field"))]
         (QueryType::TestAddInPrimeField, FieldType::Fp31) => do_query(

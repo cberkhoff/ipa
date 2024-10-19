@@ -10,7 +10,7 @@ use futures::Stream;
 
 use crate::{
     helpers::HelperIdentity,
-    protocol::{Gate, QueryId},
+    protocol::{Gate, QueryId}, sharding::Sharded,
 };
 
 mod handler;
@@ -276,6 +276,10 @@ pub trait Transport: Clone + Send + Sync + 'static {
     fn clone_ref(&self) -> Self {
         <Self as Clone>::clone(self)
     }
+}
+
+trait ShardedTransport: Transport {
+    fn config(&self) -> Sharded;
 }
 
 #[cfg(all(test, unit_test))]

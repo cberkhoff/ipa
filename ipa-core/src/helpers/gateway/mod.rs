@@ -28,7 +28,7 @@ use crate::{
         ShardChannelId, TotalRecords, Transport,
     },
     protocol::QueryId,
-    sharding::ShardIndex,
+    sharding::{ShardIndex, Sharded},
     sync::{Arc, Mutex},
     utils::NonZeroU32PowerOfTwo,
 };
@@ -138,6 +138,11 @@ impl Gateway {
     #[must_use]
     pub fn config(&self) -> &GatewayConfig {
         &self.config
+    }
+
+    #[must_use]
+    pub fn sharding_config(&self) -> Option<Sharded> {
+        
     }
 
     /// Returns a sender suitable for sending data between MPC helpers. The data must be approved

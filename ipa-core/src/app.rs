@@ -190,9 +190,8 @@ impl RequestHandler<ShardIndex> for Inner {
                 HelperResponse::from(qp.complete(query_id).await?)
             }
             RouteId::PrepareQuery => {
-                todo!()
-                // let req = req.into::<PrepareQuery>()?;
-                // HelperResponse::from(qp.prepare(&self.shard_transport, req)?)
+                let req = req.into::<PrepareQuery>()?;
+                HelperResponse::from(qp.prepare_shard(req)?)
             }
             r => {
                 return Err(ApiError::BadRequest(
@@ -233,7 +232,7 @@ impl RequestHandler<HelperIdentity> for Inner {
             }
             RouteId::PrepareQuery => {
                 let req = req.into::<PrepareQuery>()?;
-                HelperResponse::from(qp.prepare(&self.mpc_transport, req)?)
+                HelperResponse::from(qp.prepare_helper(&self.mpc_transport, &self.shard_transport, req)?)
             }
             RouteId::QueryInput => {
                 let query_id = ext_query_id(&req)?;

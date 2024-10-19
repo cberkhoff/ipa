@@ -7,22 +7,15 @@ use futures::{future::try_join, stream};
 use serde::Serialize;
 
 use crate::{
-    error::Error as ProtocolError,
-    executor::IpaRuntime,
-    helpers::{
+    error::Error as ProtocolError, executor::IpaRuntime, helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
         Gateway, GatewayConfig, MpcTransportError, MpcTransportImpl, Role, RoleAssignment,
         ShardTransportImpl, Transport,
-    },
-    hpke::{KeyRegistry, PrivateKeyOnly},
-    protocol::QueryId,
-    query::{
+    }, hpke::{KeyRegistry, PrivateKeyOnly}, protocol::QueryId, query::{
         executor,
         state::{QueryState, QueryStatus, RemoveQuery, RunningQueries, StateError},
         CompletionHandle, ProtocolResult,
-    },
-    sync::Arc,
-    utils::NonZeroU32PowerOfTwo,
+    }, sharding::ShardIndex, sync::Arc, utils::NonZeroU32PowerOfTwo
 };
 
 /// `Processor` accepts and tracks requests to initiate new queries on this helper party
@@ -178,6 +171,8 @@ impl Processor {
         .await
         .map_err(NewQueryError::MpcTransport)?;
 
+        // prepare shards in my helper
+
         handle.set_state(QueryState::AwaitingInputs(query_id, req, roles))?;
 
         guard.restore();
@@ -192,16 +187,41 @@ impl Processor {
     ///
     /// ## Errors
     /// if query is already running or this helper cannot be a follower in it
-    pub fn prepare(
+    pub fn prepare_helper(
         &self,
-        transport: &MpcTransportImpl,
+        mpc_transport: &MpcTransportImpl,
+        shard_transport: &ShardTransportImpl,
         req: PrepareQuery,
     ) -> Result<(), PrepareQueryError> {
-        let my_role = req.roles.role(transport.identity());
+        let my_role = req.roles.role(mpc_transport.identity());
+        let shard_index = shard_transport.identity();
 
         if my_role == Role::H1 {
             return Err(PrepareQueryError::WrongTarget);
         }
+        if shard_index != ShardIndex::FIRST {
+            return Err(PrepareQueryError::WrongTarget);
+        }
+        let handle = self.queries.handle(req.query_id);
+        if handle.status().is_some() {
+            return Err(PrepareQueryError::AlreadyRunning);
+        }
+
+        shard_transport.send(dest, req.clone(), stream::empty());
+
+        handle.set_state(QueryState::AwaitingInputs(
+            req.query_id,
+            req.config,
+            req.roles,
+        ))?;
+
+        Ok(())
+    }
+
+    pub fn prepare_shard(
+        &self,
+        req: PrepareQuery,
+    ) -> Result<(), PrepareQueryError> {
         let handle = self.queries.handle(req.query_id);
         if handle.status().is_some() {
             return Err(PrepareQueryError::AlreadyRunning);
@@ -550,7 +570,7 @@ mod tests {
                 processor.query_status(QueryId).unwrap_err(),
                 QueryStatusError::NoSuchQuery(_)
             ));
-            processor.prepare(&transport, req).unwrap();
+            processor.prepare_helper(&transport, req).unwrap();
             assert_eq!(
                 QueryStatus::AwaitingInputs,
                 processor.query_status(QueryId).unwrap()
@@ -566,7 +586,7 @@ mod tests {
             let processor = Processor::default();
 
             assert!(matches!(
-                processor.prepare(&transport, req),
+                processor.prepare_helper(&transport, req),
                 Err(PrepareQueryError::WrongTarget)
             ));
         }
@@ -578,9 +598,9 @@ mod tests {
             let req = prepare_query(identities);
             let transport = network.transport(identities[1]);
             let processor = Processor::default();
-            processor.prepare(&transport, req.clone()).unwrap();
+            processor.prepare_helper(&transport, req.clone()).unwrap();
             assert!(matches!(
-                processor.prepare(&transport, req),
+                processor.prepare_helper(&transport, req),
                 Err(PrepareQueryError::AlreadyRunning)
             ));
         }
