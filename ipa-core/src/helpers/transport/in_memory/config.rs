@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::{
     helpers::{HelperIdentity, Role, RoleAssignment},
     protocol::Gate,
-    sharding::ShardIndex,
+    sharding::{ShardIndex, Sharded},
     sync::Arc,
 };
 
@@ -56,9 +56,9 @@ impl<F: Fn(&InspectContext, &mut Vec<u8>) + Send + Sync + 'static> StreamInterce
 /// The general context provided to stream inspectors.
 #[derive(Debug)]
 pub struct InspectContext {
-    /// The shard index of this instance.
+    /// The shard configuration of this instance.
     /// This is `None` for non-sharded helpers.
-    pub shard_index: Option<ShardIndex>,
+    pub shard_config: Option<Sharded>,
     /// The MPC identity of this instance.
     /// The combination (`shard_index`, `identity`)
     /// uniquely identifies a single shard within
@@ -108,7 +108,7 @@ impl<F: Fn(&MaliciousHelperContext, &mut Vec<u8>) + Send + Sync> MaliciousHelper
         let dest = self.role_assignment.role(dest);
 
         MaliciousHelperContext {
-            shard_index: ctx.shard_index,
+            shard_index: ctx.shard_config.map(|c| c.shard_id),
             dest,
             gate: ctx.gate.clone(),
         }

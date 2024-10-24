@@ -21,18 +21,17 @@ use tracing::Instrument;
 use crate::{
     error::BoxError,
     helpers::{
-        in_memory_config,
-        in_memory_config::DynStreamInterceptor,
+        in_memory_config::{self, DynStreamInterceptor},
         transport::{
             in_memory::config::InspectContext,
             routing::{Addr, RouteId},
         },
         ApiError, BodyStream, HandlerRef, HelperIdentity, HelperResponse, NoResourceIdentifier,
-        QueryIdBinding, ReceiveRecords, RequestHandler, RouteParams, StepBinding, StreamCollection,
-        Transport, TransportIdentity,
+        QueryIdBinding, ReceiveRecords, RequestHandler, RouteParams, ShardedTransport, StepBinding,
+        StreamCollection, Transport, TransportIdentity,
     },
     protocol::{Gate, QueryId},
-    sharding::ShardIndex,
+    sharding::{ShardIndex, Sharded},
     sync::{Arc, Weak},
 };
 
@@ -187,7 +186,7 @@ impl<I: TransportIdentity> Transport for Weak<InMemoryTransport<I>> {
 
         let (ack_tx, ack_rx) = oneshot::channel();
         let context = gate.map(|gate| InspectContext {
-            shard_index: this.config.shard_index,
+            shard_config: this.config.shard_config,
             identity: this.config.identity,
             dest: dest.as_str(),
             gate,
@@ -237,6 +236,12 @@ impl<I: TransportIdentity> Transport for Weak<InMemoryTransport<I>> {
     }
 }
 
+impl ShardedTransport for Weak<InMemoryTransport<ShardIndex>> {
+    fn config(&self) -> Sharded {
+        self.upgrade().unwrap().config.shard_config.unwrap()
+    }
+}
+
 /// Convenience struct to support heterogeneous in-memory streams
 pub struct InMemoryStream {
     /// There is only one reason for this to have dynamic dispatch: tests that use `from_iter` method.
@@ -275,7 +280,7 @@ impl Debug for InMemoryStream {
 }
 
 pub struct Setup<I> {
-    identity: I,
+    pub identity: I,
     tx: ConnectionTx<I>,
     rx: ConnectionRx<I>,
     connections: HashMap<I, ConnectionTx<I>>,
@@ -626,7 +631,7 @@ mod tests {
 }
 
 pub struct TransportConfig {
-    pub shard_index: Option<ShardIndex>,
+    pub shard_config: Option<Sharded>,
     pub identity: HelperIdentity,
     pub stream_interceptor: DynStreamInterceptor,
 }
@@ -650,9 +655,12 @@ impl TransportConfigBuilder {
         self
     }
 
-    pub fn bind_to_shard(&self, shard_index: ShardIndex) -> TransportConfig {
+    pub fn bind_to_shard(&self, shard_id: ShardIndex, shard_count: ShardIndex) -> TransportConfig {
         TransportConfig {
-            shard_index: Some(shard_index),
+            shard_config: Some(Sharded {
+                shard_id,
+                shard_count,
+            }),
             identity: self.identity,
             stream_interceptor: Arc::clone(&self.stream_interceptor),
         }
@@ -660,7 +668,7 @@ impl TransportConfigBuilder {
 
     pub fn not_sharded(&self) -> TransportConfig {
         TransportConfig {
-            shard_index: None,
+            shard_config: None,
             identity: self.identity,
             stream_interceptor: Arc::clone(&self.stream_interceptor),
         }

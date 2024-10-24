@@ -131,6 +131,10 @@ impl NetworkConfig<Shard> {
             identities,
         }
     }
+
+    pub fn shard_count(&self) -> ShardIndex {
+        ShardIndex::from(u32::try_from(self.peers.len()).unwrap())
+    }
 }
 
 impl NetworkConfig<Helper> {

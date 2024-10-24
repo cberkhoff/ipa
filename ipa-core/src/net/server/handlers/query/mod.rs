@@ -143,7 +143,7 @@ pub mod test_helpers {
 
     pub async fn assert_fails_with_handler(
         req: hyper::Request<Body>,
-        handler: Arc<dyn RequestHandler<Identity = HelperIdentity>>,
+        handler: Arc<dyn RequestHandler<HelperIdentity>>,
         expected_status: StatusCode,
     ) {
         let test_server = TestServer::builder()
@@ -156,7 +156,7 @@ pub mod test_helpers {
 
     pub async fn assert_success_with(
         req: hyper::Request<Body>,
-        handler: Arc<dyn RequestHandler<Identity = HelperIdentity>>,
+        handler: Arc<dyn RequestHandler<HelperIdentity>>,
     ) -> bytes::Bytes {
         let test_server = TestServer::builder()
             .with_request_handler(handler)

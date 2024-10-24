@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use futures::{Stream, TryFutureExt};
 use pin_project::{pin_project, pinned_drop};
 
-use super::{client::resp_ok, ConnectionFlavor, Helper, Shard};
+use super::{client::resp_ok, error::ShardError, ConnectionFlavor, Helper, Shard};
 use crate::{
     config::{NetworkConfig, ServerConfig},
     executor::IpaRuntime,
@@ -18,11 +18,11 @@ use crate::{
         routing::{Addr, RouteId},
         ApiError, BodyStream, HandlerRef, HelperIdentity, HelperResponse, NoQueryId,
         NoResourceIdentifier, NoStep, QueryIdBinding, ReceiveRecords, RequestHandler, RouteParams,
-        StepBinding, StreamCollection, Transport, TransportIdentity,
+        ShardedTransport, StepBinding, StreamCollection, Transport, TransportIdentity,
     },
     net::{client::IpaHttpClient, error::Error, IpaHttpServer},
     protocol::{Gate, QueryId},
-    sharding::ShardIndex,
+    sharding::{ShardIndex, Sharded},
     sync::Arc,
 };
 
@@ -45,6 +45,7 @@ pub struct MpcHttpTransport {
 #[derive(Clone)]
 pub struct ShardHttpTransport {
     inner_transport: Arc<HttpTransport<Shard>>,
+    shard_config: Sharded,
 }
 
 impl RouteParams<RouteId, NoQueryId, NoStep> for QueryConfig {
@@ -289,7 +290,7 @@ impl ShardHttpTransport {
     #[must_use]
     pub fn new(
         http_runtime: IpaRuntime,
-        identity: ShardIndex,
+        shard_config: Sharded,
         server_config: ServerConfig,
         network_config: NetworkConfig<Shard>,
         clients: Vec<IpaHttpClient<Shard>>,
@@ -298,11 +299,12 @@ impl ShardHttpTransport {
         let transport = Self {
             inner_transport: Arc::new(HttpTransport {
                 http_runtime,
-                identity,
+                identity: shard_config.shard_id,
                 clients,
                 handler,
                 record_streams: StreamCollection::default(),
             }),
+            shard_config,
         };
 
         let server = IpaHttpServer::new_shards(&transport, server_config, network_config);
@@ -314,7 +316,7 @@ impl ShardHttpTransport {
 impl Transport for ShardHttpTransport {
     type Identity = ShardIndex;
     type RecordsStream = ReceiveRecords<ShardIndex, BodyStream>;
-    type Error = Error;
+    type Error = ShardError;
 
     fn identity(&self) -> Self::Identity {
         self.inner_transport.identity
@@ -334,7 +336,13 @@ impl Transport for ShardHttpTransport {
         R: RouteParams<RouteId, Q, S>,
         D: Stream<Item = Vec<u8>> + Send + 'static,
     {
-        self.inner_transport.send(dest, route, data).await
+        self.inner_transport
+            .send(dest, route, data)
+            .map_err(|source| ShardError {
+                shard_index: self.identity(),
+                source,
+            })
+            .await
     }
 
     fn receive<R: RouteParams<NoResourceIdentifier, QueryId, Gate>>(
@@ -346,9 +354,15 @@ impl Transport for ShardHttpTransport {
     }
 }
 
+impl ShardedTransport for ShardHttpTransport {
+    fn config(&self) -> Sharded {
+        self.shard_config
+    }
+}
+
 #[cfg(all(test, web_test, descriptive_gate))]
 mod tests {
-    use std::{iter::zip, task::Poll};
+    use std::task::Poll;
 
     use bytes::Bytes;
     use futures::{
@@ -371,10 +385,9 @@ mod tests {
         },
         net::{
             client::ClientIdentity,
-            test::{ClientIdentities, TestConfig, TestConfigBuilder, TestServer},
+            test::{ClientIdentities, TestApp, TestConfig, TestConfigBuilder, TestServer},
         },
         secret_sharing::{replicated::semi_honest::AdditiveShare, IntoShares},
-        sharding::ShardedHelperIdentity,
         test_fixture::Reconstruct,
         AppConfig, AppSetup, HelperApp,
     };
@@ -448,70 +461,72 @@ mod tests {
         );
     }
 
-    // TODO(651): write a test for an error while reading the body (after error handling is finalized)
-    async fn make_helpers(mut conf: TestConfig) -> [HelperApp; 3] {
-        let leaders_ring = conf.rings.pop().unwrap();
-        join_all(zip(HelperIdentity::make_three(), leaders_ring.servers).map(
-            |(id, mut addr_server)| {
-                let (setup, mpc_handler) = AppSetup::new(AppConfig::default());
-                let sid = ShardedHelperIdentity::new(id, ShardIndex::FIRST);
-                let identities = ClientIdentities::new(conf.disable_https, sid);
+    async fn start_app(mut test_app: TestApp, disable_https: bool) -> HelperApp {
+        let (setup, mpc_handler, shard_handler) = AppSetup::new(AppConfig::default());
+        let sid = test_app.mpc_server.id;
+        let identities = ClientIdentities::new(disable_https, sid);
 
-                // Ring config
-                let clients = IpaHttpClient::from_conf(
-                    &IpaRuntime::current(),
-                    &leaders_ring.network,
-                    &identities.helper,
-                );
-                let (transport, server) = MpcHttpTransport::new(
-                    IpaRuntime::current(),
-                    id,
-                    addr_server.config.clone(),
-                    leaders_ring.network.clone(),
-                    &clients,
-                    Some(mpc_handler),
-                );
+        // Ring config
+        let clients = IpaHttpClient::from_conf(
+            &IpaRuntime::current(),
+            &test_app.mpc_network_config,
+            &identities.helper,
+        );
+        let (transport, server) = MpcHttpTransport::new(
+            IpaRuntime::current(),
+            sid.helper_identity,
+            test_app.mpc_server.config,
+            test_app.mpc_network_config,
+            &clients,
+            Some(mpc_handler),
+        );
 
-                // Shard Config
-                let helper_shards = conf.get_shards_for_helper(id);
-                let addr_shard = helper_shards.get_first_shard();
-                let shard_network_config = helper_shards.network.clone();
-                let shard_clients = IpaHttpClient::<Shard>::shards_from_conf(
-                    &IpaRuntime::current(),
-                    &shard_network_config,
-                    &identities.shard,
-                );
-                let (shard_transport, shard_server) = ShardHttpTransport::new(
-                    IpaRuntime::current(),
-                    sid.shard_index,
-                    addr_shard.config.clone(),
-                    shard_network_config,
-                    shard_clients,
-                    None, // This will come online once we go into Query Workflow
-                );
-
-                let helper_shards = conf.get_shards_for_helper_mut(id);
-                let addr_shard = helper_shards.get_first_shard_mut();
-                let ring_socket = addr_server.socket.take();
-                let sharding_socket = addr_shard.socket.take();
-
-                async move {
-                    join(
-                        server.start_on(&IpaRuntime::current(), ring_socket, ()),
-                        shard_server.start_on(&IpaRuntime::current(), sharding_socket, ()),
-                    )
-                    .await;
-                    setup.connect(transport, shard_transport)
-                }
+        // Shard Config
+        let shard_clients = IpaHttpClient::<Shard>::shards_from_conf(
+            &IpaRuntime::current(),
+            &test_app.shard_network_config,
+            &identities.shard,
+        );
+        let (shard_transport, shard_server) = ShardHttpTransport::new(
+            IpaRuntime::current(),
+            Sharded {
+                shard_id: sid.shard_index,
+                shard_count: test_app.shard_network_config.shard_count(),
             },
-        ))
-        .await
-        .try_into()
-        .ok()
-        .unwrap()
+            test_app.shard_server.config,
+            test_app.shard_network_config,
+            shard_clients,
+            Some(shard_handler),
+        );
+
+        join(
+            server.start_on(
+                &IpaRuntime::current(),
+                test_app.mpc_server.socket.take(),
+                (),
+            ),
+            shard_server.start_on(
+                &IpaRuntime::current(),
+                test_app.shard_server.socket.take(),
+                (),
+            ),
+        )
+        .await;
+        setup.connect(transport, shard_transport)
     }
 
-    async fn test_three_helpers(conf: TestConfig) {
+    // TODO(651): write a test for an error while reading the body (after error handling is finalized)
+    async fn make_helpers(conf: TestConfig) -> Vec<HelperApp> {
+        let disable_https = conf.disable_https;
+        join_all(
+            conf.into_apps()
+                .into_iter()
+                .map(|a| start_app(a, disable_https)),
+        )
+        .await
+    }
+
+    async fn test_make_helpers(conf: TestConfig) {
         let clients = IpaHttpClient::from_conf(
             &IpaRuntime::current(),
             &conf.leaders_ring().network,
@@ -582,12 +597,27 @@ mod tests {
         let conf = TestConfigBuilder::default()
             .with_disable_https_option(true)
             .build();
-        test_three_helpers(conf).await;
+        test_make_helpers(conf).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn three_helpers_https() {
         let conf = TestConfigBuilder::default().build();
-        test_three_helpers(conf).await;
+        test_make_helpers(conf).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_shards_https() {
+        let conf = TestConfigBuilder::default().two_shards().build();
+        test_make_helpers(conf).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn four_shards_http() {
+        let conf = TestConfigBuilder::default()
+            .with_shard_count(4)
+            .with_disable_https_option(true)
+            .build();
+        test_make_helpers(conf).await;
     }
 }

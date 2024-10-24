@@ -3,7 +3,10 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
-use futures::{future::try_join, stream};
+use futures::{
+    future::{try_join, try_join_all},
+    stream,
+};
 use serde::Serialize;
 
 use crate::{
@@ -12,7 +15,7 @@ use crate::{
     helpers::{
         query::{PrepareQuery, QueryConfig, QueryInput},
         Gateway, GatewayConfig, MpcTransportError, MpcTransportImpl, Role, RoleAssignment,
-        ShardTransportImpl, Transport,
+        ShardTransportError, ShardTransportImpl, ShardedTransport, Transport,
     },
     hpke::{KeyRegistry, PrivateKeyOnly},
     protocol::QueryId,
@@ -21,6 +24,7 @@ use crate::{
         state::{QueryState, QueryStatus, RemoveQuery, RunningQueries, StateError},
         CompletionHandle, ProtocolResult,
     },
+    sharding::{ShardConfiguration, ShardIndex},
     sync::Arc,
     utils::NonZeroU32PowerOfTwo,
 };
@@ -66,6 +70,8 @@ pub enum NewQueryError {
     State(#[from] StateError),
     #[error(transparent)]
     MpcTransport(#[from] MpcTransportError),
+    #[error(transparent)]
+    ShardTransport(#[from] ShardTransportError),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -79,6 +85,8 @@ pub enum PrepareQueryError {
         #[from]
         source: StateError,
     },
+    #[error(transparent)]
+    ShardTransport(#[from] ShardTransportError),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -148,9 +156,11 @@ impl Processor {
     /// ## Errors
     /// When other peers failed to acknowledge this query
     #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::disallowed_methods)]
     pub async fn new_query(
         &self,
         transport: MpcTransportImpl,
+        shard_transport: ShardTransportImpl,
         req: QueryConfig,
     ) -> Result<PrepareQuery, NewQueryError> {
         let query_id = QueryId;
@@ -170,6 +180,8 @@ impl Processor {
             roles: roles.clone(),
         };
 
+        println!("New query");
+        let shard_config = shard_transport.config();
         // Inform other parties about new query. If any of them rejects it, this join will fail
         try_join(
             transport.send(left, prepare_request.clone(), stream::empty()),
@@ -177,6 +189,14 @@ impl Processor {
         )
         .await
         .map_err(NewQueryError::MpcTransport)?;
+
+        // Prepare all the shards on Helper 1 (add to join above)
+        try_join_all(shard_config.peer_shards().map(|shard_id| {
+            println!("Sending prepare to shard H1-{shard_id}");
+            shard_transport.send(shard_id, prepare_request.clone(), stream::empty())
+        }))
+        .await
+        .map_err(NewQueryError::ShardTransport)?;
 
         handle.set_state(QueryState::AwaitingInputs(query_id, req, roles))?;
 
@@ -192,20 +212,58 @@ impl Processor {
     ///
     /// ## Errors
     /// if query is already running or this helper cannot be a follower in it
-    pub fn prepare(
+    #[allow(clippy::disallowed_methods)]
+    pub async fn prepare_helper(
         &self,
-        transport: &MpcTransportImpl,
+        mpc_transport: MpcTransportImpl,
+        shard_transport: ShardTransportImpl,
         req: PrepareQuery,
     ) -> Result<(), PrepareQueryError> {
-        let my_role = req.roles.role(transport.identity());
+        let my_role = req.roles.role(mpc_transport.identity());
+        let shard_index = shard_transport.identity();
 
         if my_role == Role::H1 {
+            return Err(PrepareQueryError::WrongTarget);
+        }
+        if shard_index != ShardIndex::FIRST {
             return Err(PrepareQueryError::WrongTarget);
         }
         let handle = self.queries.handle(req.query_id);
         if handle.status().is_some() {
             return Err(PrepareQueryError::AlreadyRunning);
         }
+
+        println!("Preparing helper in {my_role} {shard_index}");
+        let shard_config = shard_transport.config();
+        try_join_all(shard_config.peer_shards().map(|shard_id| {
+            println!("Sending prepare to shard {my_role} {shard_id}");
+            shard_transport.send(shard_id, req.clone(), stream::empty())
+        }))
+        .await?;
+
+        handle.set_state(QueryState::AwaitingInputs(
+            req.query_id,
+            req.config,
+            req.roles,
+        ))?;
+
+        Ok(())
+    }
+
+    /// On prepare, each shard:
+    /// * ensures that it is not the leader on this query
+    /// * query is not registered yet
+    /// * creates gateway and network
+    /// * registers query
+    ///
+    /// ## Errors
+    /// if query is already running or this helper cannot be a follower in it
+    pub fn prepare_shard(&self, req: PrepareQuery) -> Result<(), PrepareQueryError> {
+        let handle = self.queries.handle(req.query_id);
+        if handle.status().is_some() {
+            return Err(PrepareQueryError::AlreadyRunning);
+        }
+        println!("Preparing shard ...");
 
         handle.set_state(QueryState::AwaitingInputs(
             req.query_id,
@@ -381,15 +439,16 @@ mod tests {
             make_owned_handler,
             query::{PrepareQuery, QueryConfig, QueryType::TestMultiply},
             ApiError, HandlerBox, HelperIdentity, HelperResponse, InMemoryMpcNetwork,
-            RequestHandler, RoleAssignment, Transport,
+            InMemoryShardNetwork, RequestHandler, RoleAssignment, Transport,
         },
         protocol::QueryId,
         query::{
             processor::Processor, state::StateError, NewQueryError, PrepareQueryError, QueryStatus,
         },
+        sharding::ShardIndex,
     };
 
-    fn prepare_query_handler<F, Fut>(cb: F) -> Arc<dyn RequestHandler<Identity = HelperIdentity>>
+    fn prepare_helper_query_handler<F, Fut>(cb: F) -> Arc<dyn RequestHandler<HelperIdentity>>
     where
         F: Fn(PrepareQuery) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<HelperResponse, ApiError>> + Send + Sync + 'static,
@@ -400,8 +459,23 @@ mod tests {
         })
     }
 
-    fn respond_ok() -> Arc<dyn RequestHandler<Identity = HelperIdentity>> {
-        prepare_query_handler(move |_| async move { Ok(HelperResponse::ok()) })
+    fn helper_respond_ok() -> Arc<dyn RequestHandler<HelperIdentity>> {
+        prepare_helper_query_handler(move |_| async move { Ok(HelperResponse::ok()) })
+    }
+
+    fn prepare_shard_query_handler<F, Fut>(cb: F) -> Arc<dyn RequestHandler<ShardIndex>>
+    where
+        F: Fn(PrepareQuery) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<HelperResponse, ApiError>> + Send + Sync + 'static,
+    {
+        make_owned_handler(move |req, _| {
+            let prepare_query = req.into().unwrap();
+            cb(prepare_query)
+        })
+    }
+
+    fn shard_respond_ok(_si: ShardIndex) -> Arc<dyn RequestHandler<ShardIndex>> {
+        prepare_shard_query_handler(move |_| async move { Ok(HelperResponse::ok()) })
     }
 
     fn test_multiply_config() -> QueryConfig {
@@ -413,20 +487,25 @@ mod tests {
         let barrier = Arc::new(Barrier::new(3));
         let h2_barrier = Arc::clone(&barrier);
         let h3_barrier = Arc::clone(&barrier);
-        let h2 = prepare_query_handler(move |_| {
+        let h2 = prepare_helper_query_handler(move |_| {
             let barrier = Arc::clone(&h2_barrier);
             async move {
                 barrier.wait().await;
                 Ok(HelperResponse::ok())
             }
         });
-        let h3 = prepare_query_handler(move |_| {
+        let h3 = prepare_helper_query_handler(move |_| {
             let barrier = Arc::clone(&h3_barrier);
             async move {
                 barrier.wait().await;
                 Ok(HelperResponse::ok())
             }
         });
+        let (shard_network, _s_handlers) =
+            InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+        let id = HelperIdentity::ONE;
+        let si0 = ShardIndex::FIRST;
+        let s0 = shard_network.transport(id, si0);
         let network = InMemoryMpcNetwork::new([
             None,
             Some(HandlerBox::owning_ref(&h2)),
@@ -436,7 +515,7 @@ mod tests {
         let p0 = Processor::default();
         let request = test_multiply_config();
 
-        let qc_future = p0.new_query(t0, request);
+        let qc_future = p0.new_query(t0, s0, request);
         pin_mut!(qc_future);
 
         // poll future once to trigger query status change
@@ -465,28 +544,38 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_duplicate_query_id() {
-        let handlers =
-            array::from_fn(|_| prepare_query_handler(|_| async { Ok(HelperResponse::ok()) }));
+        let handlers = array::from_fn(|_| {
+            prepare_helper_query_handler(|_| async { Ok(HelperResponse::ok()) })
+        });
         let network =
             InMemoryMpcNetwork::new(handlers.each_ref().map(HandlerBox::owning_ref).map(Some));
         let [t0, _, _] = network.transports();
         let p0 = Processor::default();
         let request = test_multiply_config();
+        let (shard_network, _s_handlers) =
+            InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+        let id = HelperIdentity::ONE;
+        let si0 = ShardIndex::FIRST;
+        let s0 = shard_network.transport(id, si0);
 
         let _qc = p0
-            .new_query(Transport::clone_ref(&t0), request)
+            .new_query(
+                Transport::clone_ref(&t0),
+                Transport::clone_ref(&s0),
+                request,
+            )
             .await
             .unwrap();
         assert!(matches!(
-            p0.new_query(t0, request).await,
+            p0.new_query(t0, s0, request).await,
             Err(NewQueryError::State(StateError::AlreadyRunning)),
         ));
     }
 
     #[tokio::test]
     async fn prepare_error() {
-        let h2 = respond_ok();
-        let h3 = prepare_query_handler(|_| async move {
+        let h2 = helper_respond_ok();
+        let h3 = prepare_helper_query_handler(|_| async move {
             Err(ApiError::QueryPrepare(PrepareQueryError::WrongTarget))
         });
         let network = InMemoryMpcNetwork::new([
@@ -497,17 +586,22 @@ mod tests {
         let [t0, _, _] = network.transports();
         let p0 = Processor::default();
         let request = test_multiply_config();
+        let (shard_network, _s_handlers) =
+            InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+        let id = HelperIdentity::ONE;
+        let si0 = ShardIndex::FIRST;
+        let s0 = shard_network.transport(id, si0);
 
         assert!(matches!(
-            p0.new_query(t0, request).await.unwrap_err(),
+            p0.new_query(t0, s0, request).await.unwrap_err(),
             NewQueryError::MpcTransport(_)
         ));
     }
 
     #[tokio::test]
     async fn can_recover_from_prepare_error() {
-        let h2 = respond_ok();
-        let h3 = prepare_query_handler(|_| async move {
+        let h2 = helper_respond_ok();
+        let h3 = prepare_helper_query_handler(|_| async move {
             Err(ApiError::QueryPrepare(PrepareQueryError::WrongTarget))
         });
         let network = InMemoryMpcNetwork::new([
@@ -515,13 +609,20 @@ mod tests {
             Some(HandlerBox::owning_ref(&h2)),
             Some(HandlerBox::owning_ref(&h3)),
         ]);
+        let (shard_network, _s_handlers) =
+            InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+        let id = HelperIdentity::ONE;
+        let si0 = ShardIndex::FIRST;
+        let s0 = shard_network.transport(id, si0);
         let [t0, _, _] = network.transports();
         let p0 = Processor::default();
         let request = test_multiply_config();
-        p0.new_query(t0.clone_ref(), request).await.unwrap_err();
+        p0.new_query(t0.clone_ref(), s0.clone_ref(), request)
+            .await
+            .unwrap_err();
 
         assert!(matches!(
-            p0.new_query(t0, request).await.unwrap_err(),
+            p0.new_query(t0, s0, request).await.unwrap_err(),
             NewQueryError::MpcTransport(_)
         ));
     }
@@ -545,12 +646,17 @@ mod tests {
             let req = prepare_query(identities);
             let transport = network.transport(identities[1]);
             let processor = Processor::default();
+            let (shard_network, _s_handlers) =
+                InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+            let id = HelperIdentity::ONE;
+            let si0 = ShardIndex::FIRST;
+            let s0 = shard_network.transport(id, si0);
 
             assert!(matches!(
                 processor.query_status(QueryId).unwrap_err(),
                 QueryStatusError::NoSuchQuery(_)
             ));
-            processor.prepare(&transport, req).unwrap();
+            processor.prepare_helper(transport, s0, req).await.unwrap();
             assert_eq!(
                 QueryStatus::AwaitingInputs,
                 processor.query_status(QueryId).unwrap()
@@ -564,9 +670,14 @@ mod tests {
             let req = prepare_query(identities);
             let transport = network.transport(identities[0]);
             let processor = Processor::default();
+            let (shard_network, _s_handlers) =
+                InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+            let id = HelperIdentity::ONE;
+            let si0 = ShardIndex::FIRST;
+            let s0 = shard_network.transport(id, si0);
 
             assert!(matches!(
-                processor.prepare(&transport, req),
+                processor.prepare_helper(transport, s0, req).await,
                 Err(PrepareQueryError::WrongTarget)
             ));
         }
@@ -578,9 +689,17 @@ mod tests {
             let req = prepare_query(identities);
             let transport = network.transport(identities[1]);
             let processor = Processor::default();
-            processor.prepare(&transport, req.clone()).unwrap();
+            let (shard_network, _s_handlers) =
+                InMemoryShardNetwork::with_shards_and_handlers(2, shard_respond_ok);
+            let id = HelperIdentity::ONE;
+            let si0 = ShardIndex::FIRST;
+            let s0 = shard_network.transport(id, si0);
+            processor
+                .prepare_helper(transport.clone_ref(), s0.clone_ref(), req.clone())
+                .await
+                .unwrap();
             assert!(matches!(
-                processor.prepare(&transport, req),
+                processor.prepare_helper(transport, s0, req).await,
                 Err(PrepareQueryError::AlreadyRunning)
             ));
         }
@@ -597,14 +716,15 @@ mod tests {
                     QueryConfig,
                     QueryType::{TestAddInPrimeField, TestMultiply},
                 },
-                HandlerBox, HelperIdentity, InMemoryMpcNetwork, Transport,
+                HandlerBox, HelperIdentity, InMemoryMpcNetwork, InMemoryShardNetwork, Transport,
             },
             protocol::QueryId,
             query::{
-                processor::{tests::respond_ok, Processor},
+                processor::{tests::helper_respond_ok, Processor},
                 state::{QueryState, RunningQuery},
                 QueryKillStatus,
             },
+            sharding::ShardIndex,
             test_executor::run,
         };
 
@@ -622,8 +742,8 @@ mod tests {
         #[test]
         fn existing_query() {
             run(|| async move {
-                let h2 = respond_ok();
-                let h3 = respond_ok();
+                let h2 = helper_respond_ok();
+                let h3 = helper_respond_ok();
                 let network = InMemoryMpcNetwork::new([
                     None,
                     Some(HandlerBox::owning_ref(&h2)),
@@ -632,9 +752,15 @@ mod tests {
                 let identities = HelperIdentity::make_three();
                 let processor = Processor::default();
                 let transport = network.transport(identities[0]);
+                let (shard_network, _s_handlers) =
+                    InMemoryShardNetwork::with_shards_and_handlers(2, super::shard_respond_ok);
+                let id = HelperIdentity::ONE;
+                let si0 = ShardIndex::FIRST;
+                let s0 = shard_network.transport(id, si0);
                 processor
                     .new_query(
                         Transport::clone_ref(&transport),
+                        Transport::clone_ref(&s0),
                         QueryConfig::new(TestMultiply, FieldType::Fp31, 1).unwrap(),
                     )
                     .await
@@ -646,6 +772,7 @@ mod tests {
                 processor
                     .new_query(
                         transport,
+                        s0,
                         QueryConfig::new(TestAddInPrimeField, FieldType::Fp32BitPrime, 1).unwrap(),
                     )
                     .await

@@ -15,6 +15,7 @@ pub(super) use send::SendingEnd;
 pub(super) use stall_detection::InstrumentedGateway;
 pub use transport::RoleResolvingTransport;
 
+use super::ShardedTransport;
 use crate::{
     helpers::{
         buffers::UnorderedReceiver,
@@ -28,7 +29,7 @@ use crate::{
         ShardChannelId, TotalRecords, Transport,
     },
     protocol::QueryId,
-    sharding::ShardIndex,
+    sharding::{ShardIndex, Sharded},
     sync::{Arc, Mutex},
     utils::NonZeroU32PowerOfTwo,
 };
@@ -50,6 +51,7 @@ pub type MpcTransportImpl = crate::net::MpcHttpTransport;
 pub type ShardTransportImpl = crate::net::ShardHttpTransport;
 
 pub type MpcTransportError = <MpcTransportImpl as Transport>::Error;
+pub type ShardTransportError = <ShardTransportImpl as Transport>::Error;
 
 /// Gateway into IPA Network infrastructure. It allows helpers send and receive messages.
 pub struct Gateway {
@@ -138,6 +140,12 @@ impl Gateway {
     #[must_use]
     pub fn config(&self) -> &GatewayConfig {
         &self.config
+    }
+
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn sharding_config(&self) -> Sharded {
+        self.transports.shard.config()
     }
 
     /// Returns a sender suitable for sending data between MPC helpers. The data must be approved
